@@ -1,0 +1,36 @@
+{
+  "dependencies": {
+    "axios": "^0.21.1",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^10.0.0",
+    "express": "^4.17.1",
+    "express-async-handler": "^1.1.4",
+    "jsonwebtoken": "^8.5.1",
+    "mongoose": "^5.13.5",
+    "multer": "^1.4.2",
+    "react-scripts": "5.0.1",
+    "socket.io": "^4.5.1"
+  },
+  "name": "aims-commerce",
+  "proxy": "http://127.0.0.1:5003",
+  "type": "module",
+  "version": "1.0.0",
+  "main": "index.js",
+  "devDependencies": {
+    "-": "^0.0.1",
+    "nodemon": "^2.0.12"
+  },
+  "engines": {
+    "node": "16.15.1",
+    "npm": "7.17.0"
+  },
+  "scripts": {
+    "build": "yarn install",
+    "start": "node backend/server.js"
+  },
+  "author": "Amirsali Muhalli",
+  "license": "ISC",
+  "description": "aims-commerce backend",
+  "repository": "https://github.com/muhallimir/aims-commerce-backend"
+}
