@@ -4,8 +4,11 @@ import bcrypt from "bcryptjs";
 import data from "../data.js";
 import User from "../models/userModel.js";
 import { generateToken, isAdmin, isAuth } from "../utils.js";
+import { OAuth2Client } from 'google-auth-library';
+
 
 const userRouter = express.Router();
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // generating data from data.js to mongodb
 userRouter.get(
@@ -15,6 +18,47 @@ userRouter.get(
     res.send({ createdUsers });
   })
 );
+
+// Google OAuth login
+userRouter.post(
+  '/google-auth',
+  expressAsyncHandler(async (req, res) => {
+    const { credential } = req.body;
+
+    const ticket = await client.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    const { email, name, sub: googleId } = payload;
+
+    if (!email) {
+      return res.status(400).send({ message: 'Google login failed' });
+    }
+
+    let user = await User.findOne({ email });
+
+    if (!user) {
+      // Create new user
+      user = new User({
+        name,
+        email,
+        password: bcrypt.hashSync(googleId + process.env.JWT_SECRET), // generate a hash
+      });
+      await user.save();
+    }
+
+    res.send({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      isAdmin: user.isAdmin,
+      token: generateToken(user),
+    });
+  })
+);
+
 
 // login router
 userRouter.post(
