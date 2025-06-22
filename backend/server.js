@@ -32,6 +32,11 @@ app.use("/api/products", productRouter);
 // server request for createdOrders
 app.use("/api/orders", orderRouter);
 
+// Example in Express (Node.js)
+app.get("/_health", (req, res) => {
+  res.send("OK");
+});
+
 // PayPal api 1
 app.get("/api/config/paypal", (req, res) => {
   res.send(process.env.PAYPAL_CLIENT_ID || "sb");
@@ -57,11 +62,11 @@ const __dirname = path.resolve();
 
 app.use("/uploads", express.static(path.join(__dirname, "/uploads")));
 
-// publishing to heroku
-app.use(express.static(path.join(__dirname, "/frontend/build")));
-app.get("*", (req, res) =>
-  res.sendFile(path.join(__dirname, "/frontend/build/index.html"))
-);
+// // publishing to heroku
+// app.use(express.static(path.join(__dirname, "/frontend/build")));
+// app.get("*", (req, res) =>
+//   res.sendFile(path.join(__dirname, "/frontend/build/index.html"))
+// );
 
 const port = process.env.PORT || 5003;
 const httpServer = http.Server(app);
