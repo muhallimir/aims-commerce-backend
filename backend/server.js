@@ -32,7 +32,7 @@ app.use("/api/products", productRouter);
 // server request for createdOrders
 app.use("/api/orders", orderRouter);
 
-// Example in Express (Node.js)
+// keep alive
 app.get("/_health", (req, res) => {
   res.send("OK");
 });

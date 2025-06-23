@@ -3,9 +3,20 @@ import expressAsyncHandler from "express-async-handler";
 import Order from "../models/orderModel.js";
 import User from "../models/userModel.js";
 import Product from "../models/productModel.js";
-import { isAdmin, isAuth, payOrderEmailTemplate } from "../utils.js";
+import {
+  isAdmin, isAuth,
+  // payOrderEmailTemplate
+} from "../utils.js";
+import Stripe from "stripe";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const orderRouter = express.Router();
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2022-11-15",
+});
 
 orderRouter.get(
   "/",
@@ -109,10 +120,8 @@ orderRouter.post(
         shippingPrice: req.body.shippingPrice,
         taxPrice: req.body.taxPrice,
         totalPrice: req.body.totalPrice,
-        // user information.
         user: req.user._id,
       });
-      //   save order details to database
       const createdOrder = await order.save();
       res
         .status(201)
@@ -122,7 +131,6 @@ orderRouter.post(
   })
 );
 
-// paypal 7
 orderRouter.put(
   "/:id/pay",
   isAuth,
@@ -145,6 +153,21 @@ orderRouter.put(
     } else {
       res.status(404).send({ message: "Order Not Found" });
     }
+  })
+);
+
+orderRouter.post(
+  "/create-payment-intent",
+  isAuth,
+  expressAsyncHandler(async (req, res) => {
+    const { amount } = req.body;
+
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(amount * 100),
+      currency: "usd",
+    });
+
+    res.send({ clientSecret: paymentIntent.client_secret });
   })
 );
 
