@@ -38,7 +38,7 @@ app.get("/_health", (req, res) => {
 });
 
 // PayPal api 1
-app.get("/api/config/paypal", (req, res) => {
+app.get("/api/config/paypal", (_req, res) => {
   res.send(process.env.PAYPAL_CLIENT_ID || "sb");
 });
 
@@ -47,26 +47,15 @@ app.get("/api/config/google", (req, res) => {
   res.send(process.env.GOOGLE_API_KEY || "");
 });
 
-// error catcher for userRouter
-app.use((err, req, res, next) => {
+// error catch for userRouter
+app.use((err, _req, res, _next) => {
   res.status(500).send({ message: err.message });
 });
-
-// unpublished (heroku)
-// app.get("/", (req, res) => {
-//   res.send("Server is ready");
-// });
 
 // uploadrouter path
 const __dirname = path.resolve();
 
 app.use("/uploads", express.static(path.join(__dirname, "/uploads")));
-
-// // publishing to heroku
-// app.use(express.static(path.join(__dirname, "/frontend/build")));
-// app.get("*", (req, res) =>
-//   res.sendFile(path.join(__dirname, "/frontend/build/index.html"))
-// );
 
 const port = process.env.PORT || 5003;
 const httpServer = http.Server(app);

@@ -29,10 +29,10 @@ productRouter.get(
       order === "lowest"
         ? { price: 1 }
         : order === "highest"
-        ? { price: -1 }
-        : order === "toprated"
-        ? { rating: -1 }
-        : { _id: 1 };
+          ? { price: -1 }
+          : order === "toprated"
+            ? { rating: -1 }
+            : { _id: 1 };
     const products = await Product.find({
       ...nameFilter,
       ...categoryFilter,
@@ -111,6 +111,37 @@ productRouter.delete(
     }
   })
 );
+
+export const uploadAndRemoveBg = async (req, res) => {
+  try {
+    const file = req.file;
+
+    const formData = new FormData();
+    formData.append("image_file", fs.createReadStream(file.path));
+    formData.append("size", "auto");
+
+    const response = await axios.post("https://api.remove.bg/v1.0/removebg", formData, {
+      headers: {
+        ...formData.getHeaders(),
+        "X-Api-Key": REMOVE_BG_API_KEY,
+      },
+      responseType: "arraybuffer",
+    });
+
+    // Save image to public directory
+    const outputPath = path.join("public", "uploads", `removed-${file.filename}`);
+    fs.writeFileSync(outputPath, response.data);
+
+    // Delete original
+    fs.unlinkSync(file.path);
+
+    res.json({ imageUrl: `/uploads/removed-${file.filename}` });
+  } catch (error) {
+    console.error(error?.response?.data || error);
+    res.status(500).json({ message: "Failed to remove background" });
+  }
+};
+
 
 // create product 1 (as admin)
 productRouter.post(
