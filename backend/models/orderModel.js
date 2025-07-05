@@ -13,6 +13,12 @@ const orderSchema = new mongoose.Schema(
           ref: "Product",
           required: true,
         },
+        seller: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Seller",
+          required: false,
+        },
+        sellerName: { type: String, required: false },
       },
     ],
     shippingAddress: {
@@ -26,7 +32,6 @@ const orderSchema = new mongoose.Schema(
       lng: Number,
     },
     paymentMethod: { type: String, required: true },
-    // paypal 8
     paymentResult: {
       id: String,
       status: String,
