@@ -9,6 +9,7 @@ import orderRouter from "./routers/orderRouter.js";
 import uploadRouter from "./routers/uploadRouter.js";
 import path from "path";
 import cors from "cors"
+import sellerRouter from "./routers/sellerRouter.js";
 
 dotenv.config();
 const app = express();
@@ -31,6 +32,9 @@ app.use("/api/products", productRouter);
 
 // server request for createdOrders
 app.use("/api/orders", orderRouter);
+
+// server request for sellers
+app.use("/api/sellers", sellerRouter);
 
 // keep alive
 app.get("/_health", (req, res) => {
