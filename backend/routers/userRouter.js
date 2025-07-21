@@ -54,6 +54,8 @@ userRouter.post(
       name: user.name,
       email: user.email,
       isAdmin: user.isAdmin,
+      isSeller: user.isSeller,
+      sellerId: user.seller,
       token: generateToken(user),
     });
   })
@@ -73,6 +75,8 @@ userRouter.post(
           name: user.name,
           email: user.email,
           isAdmin: user.isAdmin,
+          isSeller: user.isSeller,
+          sellerId: user.seller,
           token: generateToken(user),
         });
         return;
@@ -97,6 +101,8 @@ userRouter.post(
       name: createdUser.name,
       email: createdUser.email,
       isAdmin: createdUser.isAdmin,
+      isSeller: createdUser.isSeller,
+      sellerId: createdUser.seller,
       token: generateToken(createdUser),
     });
   })
