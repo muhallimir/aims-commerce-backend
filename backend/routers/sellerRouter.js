@@ -453,6 +453,126 @@ sellerRouter.put(
     })
 );
 
+// PUT /api/sellers/profile — Update seller profile
+sellerRouter.put(
+    "/profile",
+    isAuth,
+    isSeller,
+    asyncHandler(async (req, res) => {
+        try {
+            const {
+                userId,
+                name,
+                storeName,
+                storeDescription,
+                phone,
+                address,
+                city,
+                country
+            } = req.body;
+
+            // Validate required fields
+            if (!name || !storeName) {
+                return res.status(400).json({
+                    message: "Missing required fields: name and storeName are required"
+                });
+            }
+
+            // For security, only allow users to update their own profile
+            // Use userId from request body, but verify it matches the authenticated user
+            const targetUserId = userId || req.user._id;
+
+            // Verify the user exists and is a seller
+            const user = await User.findById(targetUserId);
+            if (!user) {
+                return res.status(404).json({ message: "User not found" });
+            }
+
+            if (!user.isSeller) {
+                return res.status(400).json({ message: "User is not a seller" });
+            }
+
+            // Security check: users can only update their own profile unless they're admin
+            if (targetUserId.toString() !== req.user._id.toString() && !req.user.isAdmin) {
+                return res.status(403).json({
+                    message: "Access denied. You can only update your own profile"
+                });
+            }
+
+            // Update User table fields (name, phone, address, city, country)
+            const userUpdateData = { name };
+            if (phone !== undefined) userUpdateData.phone = phone;
+            if (address !== undefined) userUpdateData.address = address;
+            if (city !== undefined) userUpdateData.city = city;
+            if (country !== undefined) userUpdateData.country = country;
+            if (storeName !== undefined) userUpdateData.storeName = storeName;
+
+            const updatedUser = await User.findByIdAndUpdate(
+                targetUserId,
+                { $set: userUpdateData },
+                { new: true, runValidators: true }
+            );
+
+            // Update Seller table fields (storeName, storeDescription)
+            // The User model's pre-save hook will handle name and storeName sync
+            const sellerUpdateData = {};
+            if (storeName !== undefined) sellerUpdateData.storeName = storeName;
+            if (storeDescription !== undefined) sellerUpdateData.storeDescription = storeDescription;
+            if (name !== undefined) sellerUpdateData.name = name;
+
+            const updatedSeller = await Seller.findOneAndUpdate(
+                { user: targetUserId },
+                { $set: sellerUpdateData },
+                { new: true, runValidators: true }
+            );
+
+            if (!updatedSeller) {
+                return res.status(404).json({ message: "Seller profile not found" });
+            }
+
+            res.json({
+                message: "Seller profile updated successfully",
+                user: {
+                    _id: updatedUser._id,
+                    name: updatedUser.name,
+                    email: updatedUser.email,
+                    phone: updatedUser.phone,
+                    address: updatedUser.address,
+                    city: updatedUser.city,
+                    country: updatedUser.country,
+                    isSeller: updatedUser.isSeller,
+                    storeName: updatedUser.storeName,
+                    updatedAt: updatedUser.updatedAt
+                },
+                seller: {
+                    _id: updatedSeller._id,
+                    storeName: updatedSeller.storeName,
+                    storeDescription: updatedSeller.storeDescription,
+                    updatedAt: updatedSeller.updatedAt
+                }
+            });
+        } catch (err) {
+            console.error("Error in /api/sellers/profile PUT:", err);
+            if (err.name === 'ValidationError') {
+                res.status(400).json({
+                    message: "Validation error",
+                    error: err.message
+                });
+            } else if (err.name === 'CastError') {
+                res.status(400).json({
+                    message: "Invalid user ID format",
+                    error: err.message
+                });
+            } else {
+                res.status(500).json({
+                    message: "Internal server error",
+                    error: err.message
+                });
+            }
+        }
+    })
+);
+
 // GET /api/sellers/:sellerId — Get seller info
 sellerRouter.get(
     "/:sellerId",
