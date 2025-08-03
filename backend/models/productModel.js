@@ -23,6 +23,7 @@ const productSchema = new mongoose.Schema(
     rating: { type: Number, required: true },
     numReviews: { type: Number, required: true },
     reviews: [reviewSchema],
+    isActive: { type: Boolean, default: true },
     seller: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Seller",
@@ -33,6 +34,16 @@ const productSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+// Virtual field for sellerId compatibility
+productSchema.virtual('sellerId').get(function () {
+  return this.seller;
+});
+
+// Ensure virtual fields are serialized
+productSchema.set('toJSON', { virtuals: true });
+productSchema.set('toObject', { virtuals: true });
+
 const Product = mongoose.model("Product", productSchema);
 
 export default Product;

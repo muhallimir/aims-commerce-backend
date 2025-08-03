@@ -112,8 +112,20 @@ orderRouter.post(
     if (req.body.orderItems.length === 0) {
       res.status(400).send({ message: "Cart is empty" });
     } else {
+      // Populate seller information for each order item
+      const orderItemsWithSeller = await Promise.all(
+        req.body.orderItems.map(async (item) => {
+          const product = await Product.findById(item.product).populate('seller');
+          return {
+            ...item,
+            seller: product.seller ? product.seller._id : null,
+            sellerName: product.seller ? product.seller.name : null,
+          };
+        })
+      );
+
       const order = new Order({
-        orderItems: req.body.orderItems,
+        orderItems: orderItemsWithSeller,
         shippingAddress: req.body.shippingAddress,
         paymentMethod: req.body.paymentMethod,
         itemsPrice: req.body.itemsPrice,
@@ -125,7 +137,6 @@ orderRouter.post(
       const createdOrder = await order.save();
       res
         .status(201)
-
         .send({ message: "New Order Created", order: createdOrder });
     }
   })

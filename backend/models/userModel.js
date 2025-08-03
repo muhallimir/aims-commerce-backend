@@ -7,6 +7,7 @@ const userSchema = new mongoose.Schema(
     password: { type: String, required: true },
     isAdmin: { type: Boolean, default: false, required: true },
     isSeller: { type: Boolean, default: false, required: true },
+    storeName: { type: String, required: false },
     seller: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Seller",
@@ -25,7 +26,7 @@ userSchema.post("save", async function (doc) {
     const seller = await mongoose.model("Seller").create({
       user: doc._id,
       name: doc.name,
-      storeName: `${doc.name}'s Store`,
+      storeName: doc.storeName || `${doc.name}'s Store`,
       products: [],
       rating: 0,
       numReviews: 0,
@@ -46,10 +47,16 @@ userSchema.post("save", async function (doc) {
 
 // sync Seller name when User name changes
 userSchema.pre("save", async function (next) {
-  if (this.isModified("name") && this.seller) {
+  if ((this.isModified("name") || this.isModified("storeName")) && this.seller) {
+    const updateData = { name: this.name };
+    if (this.storeName) {
+      updateData.storeName = this.storeName;
+    } else {
+      updateData.storeName = `${this.name}'s Store`;
+    }
     await mongoose.model("Seller").updateOne(
       { _id: this.seller },
-      { $set: { name: this.name, storeName: `${this.name}'s Store` } }
+      { $set: updateData }
     );
   }
   next();

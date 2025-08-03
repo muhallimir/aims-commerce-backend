@@ -11,6 +11,8 @@ const sellerSchema = new mongoose.Schema(
         name: { type: String, required: true },
         products: [{ type: mongoose.Schema.Types.ObjectId, ref: "Product" }],
         storeName: { type: String },
+        storeDescription: { type: String },
+        profileImage: { type: String },
         rating: { type: Number, default: 0 },
         numReviews: { type: Number, default: 0 },
     },
