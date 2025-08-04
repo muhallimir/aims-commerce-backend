@@ -11,6 +11,10 @@ const userSchema = new mongoose.Schema(
     country: { type: String, required: false },
     isAdmin: { type: Boolean, default: false, required: true },
     isSeller: { type: Boolean, default: false, required: true },
+    phone: { type: String, required: false },
+    address: { type: String, required: false },
+    city: { type: String, required: false },
+    country: { type: String, required: false },
     storeName: { type: String, required: false },
     seller: {
       type: mongoose.Schema.Types.ObjectId,

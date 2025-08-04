@@ -53,6 +53,11 @@ userRouter.post(
       _id: user._id,
       name: user.name,
       email: user.email,
+      phone: user.phone || '',
+      address: user.address || '',
+      city: user.city || '',
+      country: user.country || '',
+      storeName: user.storeName || '',
       isAdmin: user.isAdmin,
       isSeller: user.isSeller,
       sellerId: user.seller,
@@ -74,6 +79,11 @@ userRouter.post(
           _id: user._id,
           name: user.name,
           email: user.email,
+          phone: user.phone || '',
+          address: user.address || '',
+          city: user.city || '',
+          country: user.country || '',
+          storeName: user.storeName || '',
           isAdmin: user.isAdmin,
           isSeller: user.isSeller,
           sellerId: user.seller,
@@ -100,6 +110,11 @@ userRouter.post(
       _id: createdUser._id,
       name: createdUser.name,
       email: createdUser.email,
+      phone: createdUser.phone || '',
+      address: createdUser.address || '',
+      city: createdUser.city || '',
+      country: createdUser.country || '',
+      storeName: createdUser.storeName || '',
       isAdmin: createdUser.isAdmin,
       isSeller: createdUser.isSeller,
       sellerId: createdUser.seller,
@@ -128,6 +143,11 @@ userRouter.put(
     if (user) {
       user.name = req.body.name || user.name;
       user.email = req.body.email || user.email;
+      user.phone = req.body.phone !== undefined ? req.body.phone : user.phone;
+      user.address = req.body.address !== undefined ? req.body.address : user.address;
+      user.city = req.body.city !== undefined ? req.body.city : user.city;
+      user.country = req.body.country !== undefined ? req.body.country : user.country;
+      user.storeName = req.body.storeName !== undefined ? req.body.storeName : user.storeName;
       if (req.body.password) {
         user.password = bcrypt.hashSync(req.body.password, 8);
       }
@@ -136,6 +156,11 @@ userRouter.put(
         _id: updatedUser._id,
         name: updatedUser.name,
         email: updatedUser.email,
+        phone: updatedUser.phone || '',
+        address: updatedUser.address || '',
+        city: updatedUser.city || '',
+        country: updatedUser.country || '',
+        storeName: updatedUser.storeName || '',
         isAdmin: updatedUser.isAdmin,
         isSeller: updatedUser.isSeller,
         token: generateToken(updatedUser),
@@ -185,6 +210,11 @@ userRouter.put(
     if (user) {
       user.name = req.body.name || user.name;
       user.email = req.body.email || user.email;
+      user.phone = req.body.phone !== undefined ? req.body.phone : user.phone;
+      user.address = req.body.address !== undefined ? req.body.address : user.address;
+      user.city = req.body.city !== undefined ? req.body.city : user.city;
+      user.country = req.body.country !== undefined ? req.body.country : user.country;
+      user.storeName = req.body.storeName !== undefined ? req.body.storeName : user.storeName;
       user.isSeller = Boolean(req.body.isSeller);
       user.isAdmin = Boolean(req.body.isAdmin);
       // user.isAdmin = req.body.isAdmin || user.isAdmin;
