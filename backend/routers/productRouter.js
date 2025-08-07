@@ -1,5 +1,6 @@
 import express from "express";
 import expressAsyncHandler from "express-async-handler";
+import mongoose from "mongoose";
 import data from "../data.js";
 import Product from "../models/productModel.js";
 import { isAdmin, isAuth } from "../utils.js";
@@ -33,12 +34,39 @@ productRouter.get(
           : order === "toprated"
             ? { rating: -1 }
             : { _id: 1 };
-    const products = await Product.find({
-      ...nameFilter,
-      ...categoryFilter,
-      ...priceFilter,
-      ...ratingFilter,
-    }).sort(sortOrder);
+
+    // Use aggregation to filter products by active stores
+    const products = await Product.aggregate([
+      {
+        $lookup: {
+          from: "sellers",
+          localField: "seller",
+          foreignField: "_id",
+          as: "sellerInfo"
+        }
+      },
+      {
+        $match: {
+          $and: [
+            nameFilter,
+            categoryFilter,
+            priceFilter,
+            ratingFilter,
+            { isActive: true }, // Product must be active
+            { "sellerInfo.isActiveStore": true } // Store must be active
+          ]
+        }
+      },
+      {
+        $project: {
+          sellerInfo: 0 // Remove seller info from response to keep original structure
+        }
+      },
+      {
+        $sort: sortOrder
+      }
+    ]);
+
     res.send(products);
   })
 );
@@ -46,8 +74,41 @@ productRouter.get(
 productRouter.get(
   "/categories",
   expressAsyncHandler(async (req, res) => {
-    const categories = await Product.find().distinct("category");
-    res.send(categories);
+    // Get categories only from active products in active stores
+    const categories = await Product.aggregate([
+      {
+        $lookup: {
+          from: "sellers",
+          localField: "seller",
+          foreignField: "_id",
+          as: "sellerInfo"
+        }
+      },
+      {
+        $match: {
+          $and: [
+            { isActive: true }, // Product must be active
+            { "sellerInfo.isActiveStore": true } // Store must be active
+          ]
+        }
+      },
+      {
+        $group: {
+          _id: "$category"
+        }
+      },
+      {
+        $project: {
+          _id: 1
+        }
+      },
+      {
+        $sort: { _id: 1 }
+      }
+    ]);
+
+    const categoryList = categories.map(cat => cat._id);
+    res.send(categoryList);
   })
 );
 
@@ -62,11 +123,38 @@ productRouter.get(
 productRouter.get(
   "/:id",
   expressAsyncHandler(async (req, res) => {
-    const product = await Product.findById(req.params.id);
-    if (product) {
-      res.send(product);
+    // Use aggregation to check if product exists and store is active
+    const productResult = await Product.aggregate([
+      {
+        $match: { _id: new mongoose.Types.ObjectId(req.params.id) }
+      },
+      {
+        $lookup: {
+          from: "sellers",
+          localField: "seller",
+          foreignField: "_id",
+          as: "sellerInfo"
+        }
+      },
+      {
+        $match: {
+          $and: [
+            { isActive: true }, // Product must be active
+            { "sellerInfo.isActiveStore": true } // Store must be active
+          ]
+        }
+      },
+      {
+        $project: {
+          sellerInfo: 0 // Remove seller info from response
+        }
+      }
+    ]);
+
+    if (productResult.length > 0) {
+      res.send(productResult[0]);
     } else {
-      res.status(404).send({ message: "Product Not Found" });
+      res.status(404).send({ message: "Product Not Found or Store Inactive" });
     }
   })
 );

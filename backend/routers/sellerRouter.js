@@ -165,8 +165,9 @@ sellerRouter.get(
                 return res.status(404).json({ message: "Seller not found" });
             }
 
+            // Query products directly by seller ID for better accuracy
             const products = await Product.find({ seller: user.seller._id });
-            res.json(products);
+            res.json(products || []);
         } catch (err) {
             console.error("Error in /api/sellers/products:", err);
             res.status(500).json({
@@ -214,6 +215,23 @@ sellerRouter.post(
             });
 
             const savedProduct = await product.save();
+
+            // Add product to seller's products array
+            await Seller.findByIdAndUpdate(
+                user.seller._id,
+                { $addToSet: { products: savedProduct._id } },
+                { new: true }
+            );
+
+            // Check if this is the seller's first product - if so, activate their store
+            const productCount = await Product.countDocuments({ seller: user.seller._id });
+            if (productCount === 1 && !user.seller.isActiveStore) {
+                await Seller.findByIdAndUpdate(
+                    user.seller._id,
+                    { $set: { isActiveStore: true } },
+                    { new: true }
+                );
+            }
 
             res.status(201).json({
                 message: "Product created successfully",
@@ -324,6 +342,13 @@ sellerRouter.delete(
             }
 
             await Product.deleteOne({ _id: req.params.productId });
+
+            // Remove product from seller's products array
+            await Seller.findByIdAndUpdate(
+                user.seller._id,
+                { $pull: { products: req.params.productId } },
+                { new: true }
+            );
 
             res.json({ message: "Product deleted successfully" });
         } catch (err) {
@@ -468,7 +493,8 @@ sellerRouter.put(
                 phone,
                 address,
                 city,
-                country
+                country,
+                isActiveStore
             } = req.body;
 
             // Validate required fields
@@ -513,12 +539,13 @@ sellerRouter.put(
                 { new: true, runValidators: true }
             );
 
-            // Update Seller table fields (storeName, storeDescription)
+            // Update Seller table fields (storeName, storeDescription, isActiveStore)
             // The User model's pre-save hook will handle name and storeName sync
             const sellerUpdateData = {};
             if (storeName !== undefined) sellerUpdateData.storeName = storeName;
             if (storeDescription !== undefined) sellerUpdateData.storeDescription = storeDescription;
             if (name !== undefined) sellerUpdateData.name = name;
+            if (isActiveStore !== undefined) sellerUpdateData.isActiveStore = isActiveStore;
 
             const updatedSeller = await Seller.findOneAndUpdate(
                 { user: targetUserId },
@@ -548,6 +575,7 @@ sellerRouter.put(
                     _id: updatedSeller._id,
                     storeName: updatedSeller.storeName,
                     storeDescription: updatedSeller.storeDescription,
+                    isActiveStore: updatedSeller.isActiveStore ?? false, // Handle undefined/null values
                     updatedAt: updatedSeller.updatedAt
                 }
             });
@@ -596,6 +624,7 @@ sellerRouter.get(
                 storeName: seller.storeName,
                 storeDescription: seller.storeDescription,
                 profileImage: seller.profileImage,
+                isActiveStore: seller.isActiveStore ?? false, // Handle undefined/null values
                 createdAt: seller.createdAt,
                 updatedAt: seller.updatedAt
             });

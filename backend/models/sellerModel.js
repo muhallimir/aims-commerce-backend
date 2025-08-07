@@ -13,6 +13,7 @@ const sellerSchema = new mongoose.Schema(
         storeName: { type: String },
         storeDescription: { type: String },
         profileImage: { type: String },
+        isActiveStore: { type: Boolean, default: false },
         rating: { type: Number, default: 0 },
         numReviews: { type: Number, default: 0 },
     },

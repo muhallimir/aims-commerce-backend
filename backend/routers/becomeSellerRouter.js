@@ -33,6 +33,9 @@ becomeSellerRouter.post(
             user.storeName = storeName || `${name}'s Store`;
             await user.save();
 
+            // Wait a moment for the post-save hook to complete
+            await new Promise(resolve => setTimeout(resolve, 200));
+
             // Generate new token with isSeller: true
             const token = generateToken(user);
 
@@ -45,10 +48,23 @@ becomeSellerRouter.post(
                     _id: updatedUser._id,
                     name: updatedUser.name,
                     email: updatedUser.email,
+                    phone: updatedUser.phone,
+                    address: updatedUser.address,
+                    city: updatedUser.city,
+                    country: updatedUser.country,
                     isSeller: updatedUser.isSeller,
                     storeName: updatedUser.storeName,
                     createdAt: updatedUser.createdAt,
                     updatedAt: updatedUser.updatedAt,
+                },
+                seller: {
+                    _id: updatedUser.seller._id,
+                    name: updatedUser.seller.name,
+                    storeName: updatedUser.seller.storeName,
+                    storeDescription: updatedUser.seller.storeDescription,
+                    isActiveStore: updatedUser.seller.isActiveStore ?? false,
+                    createdAt: updatedUser.seller.createdAt,
+                    updatedAt: updatedUser.seller.updatedAt,
                 },
                 token
             });
