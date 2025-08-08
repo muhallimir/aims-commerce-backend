@@ -132,6 +132,30 @@ io.on("connection", (socket) => {
       }
     }
   });
+
+  // New event for escalating from chatbot to human support
+  socket.on("escalateToHuman", (userData) => {
+    const admin = users.find((x) => x.isAdmin && x.online);
+    if (admin) {
+      // Notify admin about escalation
+      io.to(admin.socketId).emit("chatbotEscalation", {
+        user: userData,
+        message: "A user has requested human assistance from the chatbot",
+        timestamp: new Date()
+      });
+
+      // Confirm to user
+      io.to(socket.id).emit("message", {
+        name: "Admin",
+        body: "I'm connecting you with a human agent. Please type in your message...",
+      });
+    } else {
+      io.to(socket.id).emit("message", {
+        name: "Admin",
+        body: "All our agents are currently offline. Please try again later or leave your message and we'll get back to you.",
+      });
+    }
+  });
 });
 
 httpServer.listen(port, () => {
