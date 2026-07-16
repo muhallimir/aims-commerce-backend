@@ -11,7 +11,7 @@ env:
 
 jobs:
   validate:
-    name: Validate & Lint
+    name: Validate
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -29,4 +29,27 @@ jobs:
       - name: Validate Prisma schema
         run: npx prisma validate
         env:
-          DATABASE_URL: "postgresql://placeholder:placeholder@placeholder:5432/placeholder"
+          DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://placeholder:placeholder@placeholder:5432/placeholder' }}
+
+      - name: Check for Mongoose references in routers
+        run: |
+          echo "Checking for Mongoose references in routers..."
+          MONGOOSE_COUNT=$(grep -rn "from.*mongoose\|require.*mongoose\|mongoose\.connect\|Schema\|\.findOne\|\.findById\|\.insertMany\|\.save()" backend/routers/ | wc -l)
+          if [ "$MONGOOSE_COUNT" -gt 0 ]; then
+            echo "❌ Found $MONGOOSE_COUNT Mongoose reference(s) in routers"
+            grep -rn "from.*mongoose\|require.*mongoose\|mongoose\.connect\|Schema\|\.findOne\|\.findById\|\.insertMany\|\.save()" backend/routers/
+            exit 1
+          fi
+          echo "✅ Zero Mongoose references found in routers"
+        env:
+          MONGOOSE_NOT_ALLOWED: true
+
+  build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t aims-backend:test .
