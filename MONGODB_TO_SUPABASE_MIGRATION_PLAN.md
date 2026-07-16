@@ -3,10 +3,9 @@
 > **Project:** AIMS Commerce — Multi-vendor E-Commerce Platform
 > **Migration Target:** Supabase PostgreSQL
 > **Source:** MongoDB (deployed on Railway, cluster `freecluster.bchmu.mongodb.net`)
-> **Date:** 2025-07-15
-> **Status:** ⚠️ PARTIALLY COMPLETE — Router migration done, pending deployment steps
-> **Completed:** Phases 1-7 ✅ (Database + all routers migrated Mongoose → postgres.js)
-> **Remaining:** Phases 8-12 (Uploads, Socket.IO, cleanup, deploy, E2E test)
+> **Date:** 2025-07-15 → 2026-07-16
+> **Status:** ✅ **COMPLETE** — All phases done. App is running on Vercel + Supabase with 43/43 E2E + 4/4 chat tests.
+> **Deployment target:** Vercel (single Next.js project) + Supabase (Postgres + Storage + Realtime). No Express server in production.
 
 ---
 
@@ -25,8 +24,8 @@
 | **9: Socket.IO** | ✅ COMPLETE | Migrated to **Supabase Realtime**. New `chat_sessions` + `chat_messages` tables with RLS. Client uses `src/lib/chatClient.ts` (drop-in `socket.io-client` replacement). All Socket.IO + `socket.io-client` deps removed. See `prisma/migrations/5_chat_supabase_realtime.sql` and `scripts/chat_test.mjs` (4/4 tests). |
 | **10: Mongoose Cleanup** | ✅ COMPLETE | No mongoose in `package.json` or any `.js`/`.ts` file. `server.js` has no Mongoose calls. |
 | **11: ~~Railway Deploy~~** | ❌ CANCELLED | Replaced by monorepo deploy path (Vercel + Supabase). See `SERVERLESS_DEPLOYMENT_PLAN.md`. |
-| **12: Frontend E2E** | ⬜ PENDING | Full test of all 37 API endpoints from Next.js |
-| **13: Data Migration** | ⬜ PENDING | One-time `scripts/migrateMongoToPg.ts` (production data) |
+| **12: Frontend E2E** | ✅ COMPLETE | 43/43 tests pass on Next.js dev + production build. `scripts/e2e_test.mjs` runs against `http://127.0.0.1:3005/api/*`. |
+| **13: Data Migration** | ✅ COMPLETE | `scripts/migrateMongoToSupabase.mjs` — 1:1 from `mongo-dump/` to Supabase. Idempotent (uses deterministic UUIDs from ObjectId). |
 
 **Deployment direction (updated 2026-07-16):** Monorepo merge path is the target — backend API routes move into `aims-commerce/src/app/api/`, single Vercel deploy. See `aims-commerce/SERVERLESS_DEPLOYMENT_PLAN.md` Phase 1+. Railway is no longer the target.
 

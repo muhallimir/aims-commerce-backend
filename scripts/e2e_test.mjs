@@ -20,7 +20,7 @@ import postgres from "postgres";
 import "dotenv/config";
 import bcrypt from "bcryptjs";
 
-const API = process.env.API_URL || "http://127.0.0.1:5003";
+const API = process.env.API_URL || "http://127.0.0.1:3005";
 const TEST_PREFIX = "__TEST__";
 const TEST_PASSWORD = "testpass123";
 
@@ -44,7 +44,7 @@ function isCreateOk(status) { return status === 200 || status === 201; }
 async function http(method, path, { token, body, isJson = true } = {}) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const init = { method, headers };
+  const init = { method, headers, redirect: "manual" };
   if (body !== undefined) init.body = isJson ? JSON.stringify(body) : body;
   const r = await fetch(`${API}${path}`, init);
   // Read body once; fall back to text if not JSON
@@ -117,14 +117,14 @@ async function signin(email) {
 // ── Test suites ───────────────────────────────────────────────
 async function testPublicEndpoints() {
   console.log("\n═══ Public endpoints (no auth) ═══");
-  const r = await http("GET", "/api/products/");
+  const r = await http("GET", "/api/products");
   record("public", "GET /api/products", r.status === 200 && Array.isArray(r.data), `status=${r.status} count=${r.data?.length}`);
 
   const r2 = await http("GET", "/api/products/categories");
   record("public", "GET /api/products/categories", r2.status === 200 && Array.isArray(r2.data), `status=${r2.status} count=${r2.data?.length}`);
 
-  const r3 = await http("GET", "/_health");
-  record("public", "GET /_health", r3.status === 200 && r3.data === "OK", `status=${r3.status}`);
+  const r3 = await http("GET", "/api/_health");
+  record("public", "GET /api/_health", r3.status === 200 && r3.data === "OK", `status=${r3.status}`);
 
   const r4 = await http("GET", "/api/config/paypal");
   record("public", "GET /api/config/paypal", r4.status === 200, `status=${r4.status}`);
@@ -190,14 +190,14 @@ async function testUserEndpoints(tokens, emails) {
 async function testProductEndpoints(tokens) {
   console.log("\n═══ Product endpoints ═══");
   // GET /api/products (public)
-  const r1 = await http("GET", "/api/products/");
+  const r1 = await http("GET", "/api/products");
   record("public", "GET /api/products (with query)", r1.status === 200, `status=${r1.status}`);
 
   // Filter by category
-  const r1b = await http("GET", "/api/products/?category=Electronics");
+  const r1b = await http("GET", "/api/products?category=Electronics");
   record("public", "GET /api/products?category=Electronics", r1b.status === 200 && r1b.data.every(p => p.category === "Electronics"), `count=${r1b.data?.length}`);
 
-  // GET /api/products/:id — pick a product whose seller is active
+  // GET /api/products:id — pick a product whose seller is active
   const anyProduct = (await sql`
     SELECT p.id FROM products p
     JOIN sellers s ON s.id = p.seller_id
@@ -205,7 +205,7 @@ async function testProductEndpoints(tokens) {
     LIMIT 1
   `)[0];
   const r2 = await http("GET", `/api/products/${anyProduct.id}`);
-  record("public", "GET /api/products/:id", r2.status === 200 && r2.data?.name, `name=${r2.data?.name}`);
+  record("public", "GET /api/products:id", r2.status === 200 && r2.data?.name, `name=${r2.data?.name}`);
 
   // POST /api/products (admin)
   const newProduct = {
@@ -217,29 +217,29 @@ async function testProductEndpoints(tokens) {
     countInStock: 10,
     description: TEST_PREFIX + " test product description",
   };
-  const r3 = await http("POST", "/api/products/", { token: tokens.admin, body: newProduct });
+  const r3 = await http("POST", "/api/products", { token: tokens.admin, body: newProduct });
   const createdProductId = r3.data?.product?._id;
   record("admin", "POST /api/products (create)", isCreateOk(r3.status) && !!createdProductId, `status=${r3.status} id=${createdProductId} body=${JSON.stringify(r3.data).slice(0, 100)}`);
 
-  const r3b = await http("POST", "/api/products/", { token: tokens.customer, body: newProduct });
+  const r3b = await http("POST", "/api/products", { token: tokens.customer, body: newProduct });
   record("customer", "POST /api/products (denied)", r3b.status === 401, `status=${r3b.status}`);
 
-  // PUT /api/products/:id (admin)
+  // PUT /api/products:id (admin)
   if (createdProductId) {
     const r4 = await http("PUT", `/api/products/${createdProductId}`, { token: tokens.admin, body: { price: 149.99 } });
-    record("admin", "PUT /api/products/:id (update)", r4.status === 200 && r4.data?.product?.price === 149.99, `status=${r4.status}`);
+    record("admin", "PUT /api/products:id (update)", r4.status === 200 && r4.data?.product?.price === 149.99, `status=${r4.status}`);
   }
 
-  // POST /api/products/:id/reviews (any auth user)
+  // POST /api/products:id/reviews (any auth user)
   if (createdProductId) {
     const r5 = await http("POST", `/api/products/${createdProductId}/reviews`, { token: tokens.customer, body: { rating: 5, comment: TEST_PREFIX + " review" } });
-    record("customer", "POST /api/products/:id/reviews", r5.status === 201 || r5.status === 200, `status=${r5.status} body=${JSON.stringify(r5.data).slice(0, 200)}`);
+    record("customer", "POST /api/products:id/reviews", r5.status === 201 || r5.status === 200, `status=${r5.status} body=${JSON.stringify(r5.data).slice(0, 200)}`);
   }
 
-  // DELETE /api/products/:id (admin) — at the end
+  // DELETE /api/products:id (admin) — at the end
   if (createdProductId) {
     const r6 = await http("DELETE", `/api/products/${createdProductId}`, { token: tokens.admin });
-    record("admin", "DELETE /api/products/:id", r6.status === 200, `status=${r6.status}`);
+    record("admin", "DELETE /api/products:id", r6.status === 200, `status=${r6.status}`);
   }
 
   return { createdProductId };
@@ -318,18 +318,18 @@ async function testOrderEndpoints(tokens) {
     itemsPrice: anyProduct.price,
     shippingPrice: 10, taxPrice: 5, totalPrice: anyProduct.price + 10 + 5,
   };
-  const r2 = await http("POST", "/api/orders/", { token: tokens.customer, body: orderBody });
+  const r2 = await http("POST", "/api/orders", { token: tokens.customer, body: orderBody });
   const orderId = r2.data?._id || r2.data?.order?._id;
   record("customer", "POST /api/orders (create)", isCreateOk(r2.status) && !!orderId, `status=${r2.status} id=${orderId} body=${JSON.stringify(r2.data).slice(0, 100)}`);
 
-  // GET /api/orders/:id (customer)
+  // GET /api/orders:id (customer)
   if (orderId) {
     const r3 = await http("GET", `/api/orders/${orderId}`, { token: tokens.customer });
-    record("customer", "GET /api/orders/:id (own)", r3.status === 200, `status=${r3.status}`);
+    record("customer", "GET /api/orders:id (own)", r3.status === 200, `status=${r3.status}`);
   }
 
-  // GET /api/orders/ (admin)
-  const r4 = await http("GET", "/api/orders/", { token: tokens.admin });
+  // GET /api/orders (admin)
+  const r4 = await http("GET", "/api/orders", { token: tokens.admin });
   record("admin", "GET /api/orders (all)", r4.status === 200 && Array.isArray(r4.data), `status=${r4.status} count=${r4.data?.length}`);
 
   // GET /api/orders/summary (admin)
@@ -339,22 +339,22 @@ async function testOrderEndpoints(tokens) {
   const r5b = await http("GET", "/api/orders/summary", { token: tokens.customer });
   record("customer", "GET /api/orders/summary (denied)", r5b.status === 401 || r5b.status === 403, `status=${r5b.status}`);
 
-  // PUT /api/orders/:id/pay (customer)
+  // PUT /api/orders:id/pay (customer)
   if (orderId) {
     const r6 = await http("PUT", `/api/orders/${orderId}/pay`, { token: tokens.customer, body: { id: "test-tx", status: "COMPLETED", update_time: new Date().toISOString() } });
-    record("customer", "PUT /api/orders/:id/pay", r6.status === 200, `status=${r6.status}`);
+    record("customer", "PUT /api/orders:id/pay", r6.status === 200, `status=${r6.status}`);
   }
 
-  // PUT /api/orders/:id/deliver (admin)
+  // PUT /api/orders:id/deliver (admin)
   if (orderId) {
     const r7 = await http("PUT", `/api/orders/${orderId}/deliver`, { token: tokens.admin });
-    record("admin", "PUT /api/orders/:id/deliver", r7.status === 200, `status=${r7.status}`);
+    record("admin", "PUT /api/orders:id/deliver", r7.status === 200, `status=${r7.status}`);
   }
 
-  // DELETE /api/orders/:id (admin)
+  // DELETE /api/orders:id (admin)
   if (orderId) {
     const r8 = await http("DELETE", `/api/orders/${orderId}`, { token: tokens.admin });
-    record("admin", "DELETE /api/orders/:id", r8.status === 200, `status=${r8.status}`);
+    record("admin", "DELETE /api/orders:id", r8.status === 200, `status=${r8.status}`);
   }
 
   return { orderId };
@@ -363,7 +363,7 @@ async function testOrderEndpoints(tokens) {
 async function testUploadEndpoint(tokens) {
   console.log("\n═══ Upload endpoint ═══");
   // Skip: requires real multer multipart. We just confirm auth is required.
-  const r1 = await http("POST", "/api/uploads/", { token: tokens.customer, body: {} });
+  const r1 = await http("POST", "/api/uploads", { token: tokens.customer, body: {} });
   // Without a file, it returns 400 ("No image file provided") — which still proves auth passed
   record("customer", "POST /api/uploads (auth passes, no file → 400)", r1.status === 400, `status=${r1.status} msg=${r1.data?.message}`);
 }

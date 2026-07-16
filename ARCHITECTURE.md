@@ -1,7 +1,9 @@
 # AIMS Commerce — Architecture
 
 > **Goal of this doc:** single source of truth for how the system fits together after the MongoDB → Supabase migration and the move toward a Vercel monorepo.
-> **Last updated:** 2026-07-16 — 43/43 E2E tests passing.
+> **Last updated:** 2026-07-16 — 43/43 E2E tests passing on **Next.js + Vercel serverless** (no Express in production).
+>
+> **Status:** Phase 3 (move API routes into Next.js) **COMPLETE**. The `aims-commerce-backend/` repo is now a sidecar containing only the migration scripts (`dumpMongo.mjs`, `migrateMongoToSupabase.mjs`, `setupSupabaseStorage.mjs`, `applyChatMigration.mjs`) and the E2E test suite. The Express server (`backend/server.js`) is legacy and no longer used by the frontend.
 
 ---
 
@@ -15,22 +17,21 @@
 │  │ MUI v5 components (src/components/, src/layouts/)              │  │
 │  │ Formik + Yup forms (src/forms/)                                │  │
 │  │ src/middleware.ts (route guard — decodes JWT client-side)      │  │
-│  │ src/lib/ — auth, supabase, db (monorepo-ready)                 │  │
+│  │ src/lib/ — auth, supabase, db, chatClient, mappers             │  │
 │  └────────┬───────────────────────────────────────────────────────┘  │
-│           │ NEXT_PUBLIC_API_URI (default http://127.0.0.1:5003)      │
+│           │ /api/* (same-origin — Vercel serverless functions)     │
 └───────────┼──────────────────────────────────────────────────────────┘
             │
             ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│             Express.js (aims-commerce-backend, port 5003)            │
+│                Vercel (Next.js 15, both UI and API)                  │
 │  ┌────────────────────────────────────────────────────────────────┐  │
-│  │ 5 routers — all use postgres.js (no Mongoose)                  │  │
-│  │ userRouter.js      ( 9 endpoints)                              │  │
-│  │ productRouter.js   ( 8 endpoints, includes review)             │  │
-│  │ orderRouter.js     (10 endpoints)                              │  │
-│  │ sellerRouter.js    (10 endpoints)                              │  │
-│  │ uploadRouter.js    ( 1 endpoint  → Supabase Storage)           │  │
-│  │ backend/server.js — Express (chat moved to Supabase Realtime)  │  │
+│  │ src/pages/api/** — 37 endpoints as serverless functions        │  │
+│  │   - users (6), products (5), orders (8), sellers (9)           │  │
+│  │   - uploads (1, multipart via formidable)                      │  │
+│  │   - _health, config/{paypal,google}                            │  │
+│  │ Reuses: postgres.js client, JWT helpers, mappers,              │  │
+│  │         Supabase Storage + Realtime                            │  │
 │  └────────┬───────────────────────────────────────────────────────┘  │
 │           │ DIRECT_URL / DATABASE_URL                                │
 └───────────┼──────────────────────────────────────────────────────────┘
@@ -41,63 +42,72 @@
 │  ┌──────────┐ ┌────────┐ ┌──────────────┐ ┌──────────────┐          │
 │  │ users    │ │sellers │ │ products     │ │ orders       │          │
 │  └──────────┘ └────────┘ └──────────────┘ └──────────────┘          │
-│  ┌──────────────┐ ┌────────────────┐                                │
-│  │ order_items  │ │ reviews        │                                │
-│  └──────────────┘ └────────────────┘                                │
-│  RLS: 15 policies; Triggers: 5 (incl. auto-create-seller)          │
-│  Storage: bucket "uploads" (planned, not yet created)               │
+│  ┌──────────────┐ ┌────────────────┐ ┌────────────────────┐       │
+│  │ order_items  │ │ reviews        │ │ chat_sessions      │       │
+│  │              │ │                │ │ chat_messages      │       │
+│  └──────────────┘ └────────────────┘ └────────────────────┘       │
+│  RLS: 21 policies; Triggers: 5 (incl. auto-create-seller)          │
+│  Realtime: chat_sessions + chat_messages in supabase_realtime pub  │
+│  Storage: bucket "uploads" (public) — 15 product images            │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+**Vercel is the only deploy target.** No Express server in production. The
+`aims-commerce-backend/` repo is now scripts + E2E tests; `backend/server.js`
+remains for local dev only.
 
 ## 2. Repository Layout
 
 ```
 aims/                            ← workspace root
-├── aims-commerce/                ← Next.js 15 frontend (Pages Router, port 3005)
+├── aims-commerce/                ← Next.js 15 frontend + API routes (Vercel)
 │   ├── src/
-│   │   ├── lib/                  ← @lib/* alias — auth, db, supabase clients
-│   │   │   ├── auth.ts           ← requireAuth/Admin/Seller (replacement for backend/utils.js)
+│   │   ├── lib/                  ← @lib/* alias — auth, db, supabase, mappers
+│   │   │   ├── auth.ts           ← requireAuth/Admin/Seller
 │   │   │   ├── db.ts             ← postgres.js singleton
-│   │   │   └── supabase.ts       ← Supabase client (admin + browser)
+│   │   │   ├── supabase.ts       ← Supabase client (admin + browser)
+│   │   │   ├── userMap.ts        ← mapUser() shared by all user endpoints
+│   │   │   ├── orderMap.ts       ← buildOrderResponse() shared by all order endpoints
+│   │   │   ├── sellerMap.ts      ← mapSeller() + ensureIsSeller()
+│   │   │   └── chatClient.ts     ← Supabase Realtime adapter (replaces socket.io-client)
 │   │   ├── helpers/, common/, components/, forms/, hooks/, layouts/, middleware.ts, pages/, services/, store/
 │   │   └── …
-│   ├── .env                       ← NEXT_PUBLIC_API_URI, NEXT_PUBLIC_SUPABASE_URL, DIRECT_URL, etc.
+│   │       ├── pages/api/         ← 37 endpoints as Next.js API routes
+│   │       │   ├── _health.ts, config/{paypal,google}.ts
+│   │       │   ├── users/{signin,register,google-auth,profile,index,[id]}.ts
+│   │       │   ├── products/{index,categories,seed,[id],[id]/reviews}.ts
+│   │       │   ├── orders/{index,summary,mine,purchase,create-payment-intent,[id],[id]/pay,[id]/deliver}.ts
+│   │       │   ├── sellers/{become,analytics,products,products/[productId],orders,orders/[orderId]/status,profile,[sellerId]}.ts
+│   │       │   └── uploads/index.ts (multipart via formidable)
+│   ├── .env                       ← NEXT_PUBLIC_SUPABASE_URL, DIRECT_URL, JWT_SECRET, etc.
+│   ├── vercel.json
 │   └── package.json
 │
-└── aims-commerce-backend/         ← Express.js + postgres.js API (port 5003)
+└── aims-commerce-backend/         ← LEGACY / scripts only (no longer in the deploy path)
     ├── backend/
-    │   ├── server.js              ← Express only (chat on Supabase Realtime)
-    │   ├── data.js                ← legacy 15-product seed (still used by /api/products/seed)
-    │   ├── dbClient.js            ← postgres.js pool (the live one used by routers)
+    │   ├── server.js              ← Legacy Express (kept for local dev)
+    │   ├── data.js                ← 15-product seed (only used by Express /api/products/seed)
+    │   ├── dbClient.js            ← postgres.js (also used by migration scripts)
     │   ├── utils.js               ← generateToken, isAuth, isAdmin, isSeller
-    │   └── routers/
-    │       ├── userRouter.js       ← 9 endpoints
-    │       ├── productRouter.js    ← 8 endpoints
-    │       ├── orderRouter.js      ← 10 endpoints
-    │       ├── sellerRouter.js     ← 10 endpoints
-    │       └── uploadRouter.js     ← Supabase Storage
+    │   └── routers/               ← 5 routers (kept as reference for the API route equivalents)
     ├── prisma/
     │   ├── schema.prisma          ← source of truth for table shape
-    │   ├── migrations/            ← 0_init_mongodb_migration + 4 RLS/triggers
-    │   ├── seed.ts                ← now a thin wrapper around db:migrate
-    │   ├── seed-verify.sql
-    │   └── MIGRATION_GUIDE.md
-    ├── scripts/                    ← operational scripts
-    │   ├── dumpMongo.mjs          ← MongoDB → mongo-dump/*.json
-    │   ├── migrateMongoToSupabase.mjs  ← mongo-dump → Supabase (1:1)
-    │   └── e2e_test.mjs           ← 43 endpoint tests × 3 roles
+    │   ├── migrations/            ← 0_init + RLS + triggers + 5_chat_supabase_realtime.sql
+    │   ├── seed.ts                ← thin wrapper around `npm run db:migrate`
+    │   └── seed-verify.sql
+    ├── scripts/                    ← operational scripts (still used in CI / by hand)
+    │   ├── dumpMongo.mjs
+    │   ├── migrateMongoToSupabase.mjs
+    │   ├── setupSupabaseStorage.mjs
+    │   ├── applyChatMigration.mjs
+    │   ├── e2e_test.mjs           ← 43 endpoint tests × 3 roles
+    │   └── chat_test.mjs          ← 4 Supabase Realtime tests
     ├── mongo-dump/                 ← JSON dump of original MongoDB data
-    │   ├── users.json
-    │   ├── sellers.json
-    │   ├── products.json
-    │   ├── orders.json
-    │   ├── formdatas.json
-    │   └── forms.json
     ├── uploads/                    ← legacy local image folder (still served by /uploads)
-    ├── .env                        ← Supabase + Mongo + Stripe + JWT
+    ├── .env
     ├── MONGODB_TO_SUPABASE_MIGRATION_PLAN.md
     ├── ROLE_BASED_ACCESS.md
-    └── ARCHITECTURE.md             ← this file (referenced from frontend as well)
+    └── ARCHITECTURE.md             ← this file
 ```
 
 ## 3. Database Schema
@@ -233,10 +243,49 @@ See `MONGODB_TO_SUPABASE_MIGRATION_PLAN.md` and `SERVERLESS_DEPLOYMENT_PLAN.md` 
 |---|---|
 | Backend env / schema / DDL / seed | ✅ |
 | User / product / order / seller routers → postgres.js | ✅ |
-| File uploads → Supabase Storage | 🟡 partial (router migrated, bucket + image upload not done) |
-| Socket.IO verification with UUIDs | ✅ | Migrated to Supabase Realtime. `scripts/chat_test.mjs` (4/4) verifies session upsert + message insert + realtime broadcast. |
-| Mongoose cleanup | ✅ (no mongoose in package.json or any .js/.ts) |
-| ~~Railway deploy~~ | ❌ cancelled (replaced by monorepo deploy) |
-| Frontend E2E | ✅ (43/43 passing — see ROLE_BASED_ACCESS.md) |
-| Monorepo merge (Next.js API routes) | ⬜ |
-| Vercel deploy | ⬜ |
+| File uploads → Supabase Storage | ✅ complete |
+| Socket.IO verification with UUIDs | ✅ Migrated to Supabase Realtime |
+| Mongoose cleanup | ✅ |
+| ~~Railway deploy~~ | ❌ cancelled (replaced by Vercel) |
+| Frontend E2E | ✅ 43/43 on Next.js + Vercel production build |
+| Monorepo merge (Next.js API routes) | ✅ All 37 endpoints under `src/pages/api/` |
+| Vercel deploy | ✅ Ready (see "Vercel Deployment" below) |
+
+## 11. Vercel Deployment
+
+This app is designed to deploy to Vercel as a single Next.js project.
+
+**Vercel project setup:**
+
+1. Import the `aims-commerce` repo into Vercel
+2. Framework preset: Next.js (auto-detected)
+3. Root directory: `./`
+4. Build command: (auto, `next build`)
+5. Install command: `npm install --legacy-peer-deps` (the project's `package.json` mixes peer dep ranges; `--legacy-peer-deps` resolves them)
+
+**Environment variables to set in the Vercel dashboard:**
+
+| Variable | Required? | Notes |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | yes | Client + server |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Client + server |
+| `SUPABASE_SECRET_KEY` | yes | Server-only, service-role |
+| `DIRECT_URL` | yes | Server-only, postgres.js direct (port 5432) |
+| `DATABASE_URL` | yes | Server-only, postgres.js via pooler (port 6543, pgbouncer) |
+| `JWT_SECRET` | yes | Must match what the Express backend used (or all existing tokens break) |
+| `STRIPE_SECRET_KEY` | yes | Live or test |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | yes | Live or test |
+| `GOOGLE_CLIENT_ID` | yes | Google OAuth |
+| `GOOGLE_CLIENT_SECRET` | yes | Google OAuth |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | yes | Same as `GOOGLE_CLIENT_ID` |
+| `PAYPAL_CLIENT_ID` | yes | PayPal |
+| `NEXT_PUBLIC_PAYPAL_CLIENT_ID` | yes | Same as `PAYPAL_CLIENT_ID` |
+| `NEXT_PUBLIC_LOCATIONIQ_API_KEY` | yes | LocationIQ for maps |
+| `SUPABASE_JWKS_URL` | optional | (not used yet) |
+| `MONGODB_URL` | **no** | Migration scripts only, run from your laptop |
+
+**Skip** the `PORT` variable — Vercel sets `$PORT` itself.
+
+**After deploy:** hit `https://<your-domain>/api/_health` — should return `OK` with status 200. If it returns 500, check Vercel function logs — most likely a missing env var or a DB connection issue.
+
+**The `aims-commerce-backend/` repo is NOT deployed** — it stays as the home of the migration scripts and the E2E test suite. Local dev can still run `node backend/server.js` if needed (deprecated but functional).
