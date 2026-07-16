@@ -1,0 +1,17 @@
+[
+  {
+    "_id": "66ade9a65866065abf0a53df",
+    "fields": [
+      {
+        "required": true,
+        "_id": "66ade9a65866065abf0a53e1",
+        "type": "email",
+        "label": "Email",
+        "value": "",
+        "createdAt": "2024-08-03T08:26:14.133Z",
+        "updatedAt": "2024-08-03T08:26:14.133Z"
+      }
+    ],
+    "__v": 1
+  }
+]

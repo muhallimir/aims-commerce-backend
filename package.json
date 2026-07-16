@@ -36,7 +36,10 @@
     "start": "node backend/server.js",
     "run-scripts": "node backend/scripts/syncProductSellers.js",
     "db:seed": "npx tsx prisma/seed.ts",
-    "db:reset": "npx prisma migrate reset --force && npx tsx prisma/seed.ts"
+    "db:reset": "npx prisma migrate reset --force && npx tsx prisma/seed.ts",
+    "db:dump": "node scripts/dumpMongo.mjs",
+    "db:migrate": "node scripts/migrateMongoToSupabase.mjs --truncate",
+    "test:e2e": "node scripts/e2e_test.mjs"
   },
   "author": "Amirsali Muhalli",
   "license": "ISC",

@@ -224,7 +224,7 @@ userRouter.put(
     const query = `UPDATE "users" SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *;`;
     values.push(userId);
 
-    const result = await sql.query(query, values);
+    const result = await sql.unsafe(query, values);
     const user = result[0];
 
     res.send(mapUser(user));
@@ -300,7 +300,7 @@ userRouter.put(
     values.push(req.params.id);
     const query = `UPDATE "users" SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *;`;
 
-    const result = await sql.query(query, values);
+    const result = await sql.unsafe(query, values);
     const updatedUser = result[0];
 
     res.send({

@@ -69,7 +69,9 @@ sellerRouter.post(
       const storeNameVal = storeName || `${name}'s Store`;
 
       const result = await sql.begin(async (sql) => {
-        // Update user to become seller
+        // Update user to become seller. The DB trigger `trigger_auto_create_seller`
+        // will fire AFTER UPDATE and insert a matching sellers row. We then
+        // patch the new seller (is_active_store, store_name) and link it on the user.
         const updatedUser = await sql`
           UPDATE "users"
           SET is_seller = true, store_name = ${storeNameVal}
@@ -77,20 +79,35 @@ sellerRouter.post(
           RETURNING *;
         `;
 
-        // Create seller profile (using the user's name from req)
-        const newSeller = await sql`
-          INSERT INTO "sellers" (id, "user_id", name, "store_name", "is_active_store")
-          VALUES (gen_random_uuid(), ${req.user._id}, ${name}, ${storeNameVal}, true)
-          RETURNING *;
+        // The trigger created the seller. Fetch and patch it.
+        const newSeller = (await sql`
+          SELECT * FROM "sellers" WHERE "user_id" = ${req.user._id}
+          ORDER BY "created_at" DESC LIMIT 1
+        `)[0];
+
+        if (!newSeller) {
+          throw new Error("Trigger failed to create seller record");
+        }
+
+        // Update the auto-created seller with the requested store info
+        await sql`
+          UPDATE "sellers"
+          SET "name" = ${name},
+              "store_name" = ${storeNameVal},
+              "is_active_store" = true
+          WHERE "id" = ${newSeller.id}
         `;
 
         // Update user's seller_id reference
         await sql`
-          UPDATE "users" SET "seller_id" = ${newSeller[0].id}
+          UPDATE "users" SET "seller_id" = ${newSeller.id}
           WHERE id = ${req.user._id};
         `;
 
-        return { user: updatedUser[0], seller: newSeller[0] };
+        return {
+          user: updatedUser[0],
+          seller: { ...newSeller, name, store_name: storeNameVal, is_active_store: true },
+        };
       });
 
       const token = generateToken({
@@ -139,8 +156,8 @@ sellerRouter.get(
       const revenueResult = await sql`
         SELECT COALESCE(SUM(oi.price * oi.qty), 0) AS total_revenue
         FROM order_items oi
-        JOIN orders o ON oi.order = o.id
-        WHERE oi.seller = ${sellerId}
+        JOIN orders o ON oi.order_id = o.id
+        WHERE oi.seller_id = ${sellerId}
           AND o.is_paid = true
       `;
 
@@ -148,8 +165,8 @@ sellerRouter.get(
       const totalOrders = await sql`
         SELECT COUNT(DISTINCT o.id) AS count
         FROM order_items oi
-        JOIN orders o ON oi.order = o.id
-        WHERE oi.seller = ${sellerId}
+        JOIN orders o ON oi.order_id = o.id
+        WHERE oi.seller_id = ${sellerId}
           AND o.is_paid = true
       `;
 
@@ -165,8 +182,8 @@ sellerRouter.get(
           EXTRACT(MONTH FROM o.paid_at)::int AS month,
           SUM(oi.price * oi.qty) AS sales
         FROM order_items oi
-        JOIN orders o ON oi.order = o.id
-        WHERE oi.seller = ${sellerId}
+        JOIN orders o ON oi.order_id = o.id
+        WHERE oi.seller_id = ${sellerId}
           AND o.is_paid = true
           AND o.paid_at >= NOW() - INTERVAL '12 months'
         GROUP BY EXTRACT(YEAR FROM o.paid_at), EXTRACT(MONTH FROM o.paid_at)
@@ -293,14 +310,14 @@ sellerRouter.put(
 
       const product = await sql`
         UPDATE "products"
-        SET name = COALESCE(${name}, name),
-            price = COALESCE(${price}, price),
-            category = COALESCE(${category}, category),
-            brand = COALESCE(${brand}, brand),
-            "count_in_stock" = COALESCE(${countInStock}, "count_in_stock"),
-            description = COALESCE(${description}, description),
-            image = COALESCE(${image}, image),
-            "is_active" = COALESCE(${isActive}, "is_active")
+        SET name = COALESCE(${name ?? null}, name),
+            price = COALESCE(${price ?? null}, price),
+            category = COALESCE(${category ?? null}, category),
+            brand = COALESCE(${brand ?? null}, brand),
+            "count_in_stock" = COALESCE(${countInStock ?? null}, "count_in_stock"),
+            description = COALESCE(${description ?? null}, description),
+            image = COALESCE(${image ?? null}, image),
+            "is_active" = COALESCE(${isActive ?? null}, "is_active")
         WHERE id = ${req.params.productId} AND "seller_id" = ${seller.id}
         RETURNING *;
       `;
@@ -385,13 +402,13 @@ sellerRouter.get(
           oi.qty,
           oi.price,
           oi.image,
-          oi.product,
+          oi.product_id,
           u.name AS user_name,
           u.email AS user_email
         FROM order_items oi
-        JOIN orders o ON oi.order = o.id
+        JOIN orders o ON oi.order_id = o.id
         JOIN users u ON o.user_id = u.id
-        WHERE oi.seller = ${seller.id}
+        WHERE oi.seller_id = ${seller.id}
         ORDER BY o.created_at DESC
       `;
 
@@ -470,8 +487,8 @@ sellerRouter.put(
 
       const updatedOrder = await sql`
         UPDATE orders
-        SET is_delivered = COALESCE(${isDelivered}, is_delivered),
-            delivered_at = COALESCE(${deliveredAtVal}, delivered_at)
+        SET is_delivered = COALESCE(${isDelivered ?? null}, is_delivered),
+            delivered_at = COALESCE(${deliveredAtVal ?? null}, delivered_at)
         WHERE id = ${req.params.orderId}
         RETURNING id, is_delivered, delivered_at, updated_at;
       `;
@@ -526,11 +543,11 @@ sellerRouter.put(
         const updatedUser = await s`
           UPDATE "users"
           SET name = ${name},
-              phone = COALESCE(${phone}, phone),
-              address = COALESCE(${address}, address),
-              city = COALESCE(${city}, city),
-              country = COALESCE(${country}, country),
-              store_name = COALESCE(${storeName}, store_name)
+              phone = COALESCE(${phone ?? null}, phone),
+              address = COALESCE(${address ?? null}, address),
+              city = COALESCE(${city ?? null}, city),
+              country = COALESCE(${country ?? null}, country),
+              store_name = COALESCE(${storeName ?? null}, store_name)
           WHERE id = ${req.user._id} AND is_seller = true
           RETURNING *;
         `;
@@ -547,9 +564,9 @@ sellerRouter.put(
         const updatedSeller = await s`
           UPDATE "sellers"
           SET name = ${name},
-              store_name = COALESCE(${storeName}, store_name),
-              store_description = COALESCE(${storeDescription}, store_description),
-              "is_active_store" = COALESCE(${isActiveStore}, "is_active_store")
+              store_name = COALESCE(${storeName ?? null}, store_name),
+              store_description = COALESCE(${storeDescription ?? null}, store_description),
+              "is_active_store" = COALESCE(${isActiveStore ?? null}, "is_active_store")
           WHERE id = ${seller.id}
           RETURNING *;
         `;

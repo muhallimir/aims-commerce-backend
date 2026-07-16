@@ -156,7 +156,7 @@ productRouter.get(
       rating:    parseFloat(product.rating),
       num_reviews: product.num_reviews,
       seller_id: product.seller_id,
-      reviews:   JSON.parse(product.reviews || "[]"),
+      reviews:   typeof product.reviews === "string" ? JSON.parse(product.reviews) : product.reviews || [],
       is_active: product.is_active,
       created_at: product.created_at,
       updated_at: product.updated_at,
@@ -353,10 +353,11 @@ productRouter.post(
         FROM reviews WHERE product_id = ${productId}
       `)[0];
 
+      const avgRatingNum = parseFloat(stats.avg_rating);
       await sql`
         UPDATE products
-        SET num_reviews = ${stats.cnt},
-            rating      = ${parseFloat(stats.avg_rating.toFixed(2))},
+        SET num_reviews = ${Number(stats.cnt)},
+            rating      = ${avgRatingNum},
             updated_at  = NOW()
         WHERE id = ${productId}
       `;

@@ -17,16 +17,18 @@
 | **1: Env Setup** | ✅ COMPLETE | Prisma 7.8.0 init, DATABASE_URL (Supabase Pooler) |
 | **2: Prisma Schema** | ✅ COMPLETE | 6 models (User, Seller, Product, Order, Item, Review) validated |
 | **3: DDL Migration** | ✅ COMPLETE | 4 SQL files applied: extensions → DDL → RLS (15 policies) → triggers (5 hooks) |
-| **4: Seed Data** | ✅ COMPLETE | postgres.js seed → 2 users + 1 seller + 15 products verified |
+| **4: Seed Data** | ✅ COMPLETE | postgres.js seed → 2 users + 1 seller + **30 products** (15 rated, 15 rating=0) verified |
 | **5: User Router** | ✅ COMPLETE | userRouter.js → postgres.js (9 endpoints, 314 lines) |
 | **6: Product Router** | ✅ COMPLETE | productRouter.js → postgres.js (8 endpoints, 386 lines) |
 | **7: Order/Seller Router** | ✅ COMPLETE | orderRouter.js + sellerRouter.js → postgres.js (20 endpoints, 1161 lines) |
-| **8: File Uploads** | ⬜ PENDING | uploadRouter.js → Supabase Storage |
+| **8: File Uploads** | 🟡 PARTIAL | `uploadRouter.js` rewritten for Supabase Storage, but **bucket "uploads" not created** and seeded products still reference local `/uploads/p*.jpg`. Needs: create bucket, migrate local images, update product `image` URLs. |
 | **9: Socket.IO** | ⬜ PENDING | Verify chat with UUID user IDs |
-| **10: Mongoose Cleanup** | ⬜ PENDING | Remove mongoose dep from package.json, remove MongoDB connection from server.js |
-| **11: Railway Deploy** | ⬜ PENDING | Update Railway env vars, test health endpoint |
+| **10: Mongoose Cleanup** | ✅ COMPLETE | No mongoose in `package.json` or any `.js`/`.ts` file. `server.js` has no Mongoose calls. |
+| **11: ~~Railway Deploy~~** | ❌ CANCELLED | Replaced by monorepo deploy path (Vercel + Supabase). See `SERVERLESS_DEPLOYMENT_PLAN.md`. |
 | **12: Frontend E2E** | ⬜ PENDING | Full test of all 37 API endpoints from Next.js |
-> **Note on ORM choice:** Phases 5-7 initially planned for Prisma Client, but Prisma 7 failed to initialize with Supabase's pgbouncer pooler in the ESM/TSX environment. We pivoted to **postgres.js** (raw parameterized SQL) which works reliably. Prisma is kept only for schema validation. All 38 active router endpoints use postgres.js exclusively.
+| **13: Data Migration** | ⬜ PENDING | One-time `scripts/migrateMongoToPg.ts` (production data) |
+
+**Deployment direction (updated 2026-07-16):** Monorepo merge path is the target — backend API routes move into `aims-commerce/src/app/api/`, single Vercel deploy. See `aims-commerce/SERVERLESS_DEPLOYMENT_PLAN.md` Phase 1+. Railway is no longer the target.
 
 ---
 
