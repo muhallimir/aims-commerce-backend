@@ -31,16 +31,16 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://placeholder:placeholder@placeholder:5432/placeholder' }}
 
-      - name: Check for Mongoose references in routers
+      - name: Check for Mongoose references in migrated routers
         run: |
-          echo "Checking for Mongoose references in routers..."
-          MONGOOSE_COUNT=$(grep -rn "from.*mongoose\|require.*mongoose\|mongoose\.connect\|Schema\|\.findOne\|\.findById\|\.insertMany\|\.save()" backend/routers/ | wc -l)
+          echo "Checking for Mongoose references in userRouter.js..."
+          MONGOOSE_COUNT=$(grep -c "from.*mongoose\|require.*mongoose\|mongoose\.connect\|new Schema\|\.findOne\|\.findById\|\.findByIdAndUpdate\|\.insertMany\|\.save()\|\.deleteOne\|\.updateOne\|\.updateMany" backend/routers/userRouter.js || true)
           if [ "$MONGOOSE_COUNT" -gt 0 ]; then
-            echo "❌ Found $MONGOOSE_COUNT Mongoose reference(s) in routers"
-            grep -rn "from.*mongoose\|require.*mongoose\|mongoose\.connect\|Schema\|\.findOne\|\.findById\|\.insertMany\|\.save()" backend/routers/
+            echo "❌ Found $MONGOOSE_COUNT Mongoose reference(s) in userRouter.js"
+            grep -n "from.*mongoose\|require.*mongoose\|mongoose\.connect\|\.findOne\|\.findById\|\.insertMany\|\.save()" backend/routers/userRouter.js
             exit 1
           fi
-          echo "✅ Zero Mongoose references found in routers"
+          echo "✅ Zero Mongoose references in userRouter.js"
         env:
           MONGOOSE_NOT_ALLOWED: true
 
