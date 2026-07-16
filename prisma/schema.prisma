@@ -1,0 +1,165 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ────────────────────────── Models ──────────────────────────
+
+model User {
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String
+  email      String  @unique
+  password   String
+  phone      String?
+  address    String?
+  city       String?
+  country    String?
+  is_admin   Boolean @default(false) @map("isAdmin")
+  is_seller  Boolean @default(false) @map("isSeller")
+  store_name String? @map("storeName")
+  seller_id  String? @map("seller") @db.Uuid
+
+  created_at DateTime @default(now()) @map("createdAt")
+  updated_at DateTime @updatedAt @map("updatedAt")
+
+  seller Seller?
+
+  orders  Order[]
+  reviews Review[]
+
+  @@map("users")
+}
+
+model Seller {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String   @unique @map("user") @db.Uuid
+  name              String
+  store_name        String?  @map("storeName")
+  store_description String?  @map("storeDescription") @db.Text
+  profile_image     String?  @map("profileImage")
+  is_active_store   Boolean  @default(false) @map("isActiveStore")
+  rating            Decimal  @default(0.00) @db.Decimal(3, 2)
+  num_reviews       Int      @default(0) @map("numReviews")
+  products_ids      String[] @map("products")
+
+  created_at DateTime @default(now()) @map("createdAt")
+  updated_at DateTime @updatedAt @map("updatedAt")
+
+  user     User        @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  products Product[]
+  items    OrderItem[]
+
+  @@map("sellers")
+}
+
+model Product {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String  @unique
+  image          String
+  brand          String
+  category       String
+  description    String  @db.Text
+  price          Decimal @db.Decimal(10, 2)
+  count_in_stock Int     @map("countInStock")
+  rating         Decimal @default(0.00) @db.Decimal(3, 2)
+  num_reviews    Int     @default(0) @map("numReviews")
+  is_active      Boolean @default(true) @map("isActive")
+  seller_id      String  @map("seller") @db.Uuid
+
+  created_at DateTime @default(now()) @map("createdAt")
+  updated_at DateTime @updatedAt @map("updatedAt")
+
+  seller  Seller      @relation(fields: [seller_id], references: [id], onDelete: Cascade)
+  reviews Review[]
+  items   OrderItem[]
+
+  @@index([category])
+  @@index([price])
+  @@index([rating])
+  @@index([seller_id])
+  @@index([is_active])
+  @@map("products")
+}
+
+model Order {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id        String  @db.Uuid
+  payment_method String  @map("paymentMethod")
+  payment_result Json?   @map("paymentResult")
+  items_price    Decimal @map("itemsPrice") @db.Decimal(12, 2)
+  shipping_price Decimal @map("shippingPrice") @db.Decimal(12, 2)
+  tax_price      Decimal @map("taxPrice") @db.Decimal(12, 2)
+  total_price    Decimal @map("totalPrice") @db.Decimal(12, 2)
+
+  // Flattened shipping address (mirrors MongoDB embedded doc)
+  shipping_full_name   String   @map("shippingFullName")
+  shipping_contact     String   @map("shippingContact")
+  shipping_address     String   @map("shippingAddress")
+  shipping_city        String   @map("shippingCity")
+  shipping_postal_code String   @map("shippingPostalCode")
+  shipping_country     String   @map("shippingCountry")
+  shipping_lat         Decimal? @map("shippingLat") @db.Decimal(10, 8)
+  shipping_lng         Decimal? @map("shippingLng") @db.Decimal(11, 8)
+
+  is_paid      Boolean   @default(false) @map("isPaid")
+  paid_at      DateTime? @map("paidAt")
+  is_delivered Boolean   @default(false) @map("isDelivered")
+  delivered_at DateTime? @map("deliveredAt")
+
+  created_at DateTime @default(now()) @map("createdAt")
+  updated_at DateTime @updatedAt @map("updatedAt")
+
+  user  User        @relation(fields: [user_id], references: [id])
+  items OrderItem[]
+
+  @@index([user_id])
+  @@index([is_paid])
+  @@index([is_delivered])
+  @@index([created_at])
+  @@map("orders")
+}
+
+model OrderItem {
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id   String  @map("order") @db.Uuid
+  product_id String  @map("product") @db.Uuid
+  seller_id  String? @map("seller") @db.Uuid
+  name       String
+  qty        Int
+  image      String
+  price      Decimal @db.Decimal(10, 2)
+
+  order   Order   @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [product_id], references: [id])
+  seller  Seller? @relation(fields: [seller_id], references: [id])
+
+  @@index([order_id])
+  @@index([seller_id])
+  @@map("order_items")
+}
+
+model Review {
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  product_id String  @map("product") @db.Uuid
+  user_id    String  @db.Uuid
+  name       String
+  comment    String  @db.Text
+  rating     Decimal @db.Decimal(3, 2)
+
+  created_at DateTime @default(now()) @map("createdAt")
+  updated_at DateTime @updatedAt @map("updatedAt")
+
+  product Product @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [user_id], references: [id])
+
+  @@unique([product_id, user_id])
+  @@index([product_id])
+  @@map("reviews")
+}

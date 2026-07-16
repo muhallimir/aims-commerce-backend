@@ -11,6 +11,7 @@
     "mongoose": "^5.13.5",
     "multer": "^1.4.2",
     "path": "^0.12.7",
+    "postgres": "^3.4.9",
     "react-scripts": "5.0.1",
     "socket.io": "^4.5.1",
     "stripe": "^18.2.1"
@@ -20,9 +21,14 @@
   "type": "module",
   "version": "1.0.0",
   "main": "index.js",
+  "prisma": {
+    "seed": "npx tsx prisma/seed.ts"
+  },
   "devDependencies": {
-    "-": "^0.0.1",
-    "nodemon": "^2.0.12"
+    "@prisma/client": "^7.8.0",
+    "nodemon": "^2.0.12",
+    "prisma": "^7.8.0",
+    "tsx": "^4.23.1"
   },
   "engines": {
     "node": ">=16.15.1",
@@ -31,7 +37,9 @@
   "scripts": {
     "build": "yarn install",
     "start": "node backend/server.js",
-    "run-scripts": "node backend/scripts/syncProductSellers.js"
+    "run-scripts": "node backend/scripts/syncProductSellers.js",
+    "db:seed": "npx tsx prisma/seed.ts",
+    "db:reset": "npx prisma migrate reset --force && npx tsx prisma/seed.ts"
   },
   "author": "Amirsali Muhalli",
   "license": "ISC",

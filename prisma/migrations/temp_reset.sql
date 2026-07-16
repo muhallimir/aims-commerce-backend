@@ -1,0 +1,10 @@
+DROP TABLE reviews CASCADE;
+DROP TABLE order_items CASCADE;
+DROP TABLE orders CASCADE;
+DROP TABLE products CASCADE;
+DROP TABLE sellers CASCADE;
+DROP TABLE users CASCADE;
+DROP FUNCTION IF EXISTS update_updated_at_column CASCADE;
+DROP FUNCTION IF EXISTS recalculate_product_rating CASCADE;
+DROP FUNCTION IF EXISTS auto_create_seller_on_isSeller CASCADE;
+DROP FUNCTION IF EXISTS sync_seller_on_user_name_change CASCADE;
