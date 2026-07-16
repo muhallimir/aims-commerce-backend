@@ -12,48 +12,42 @@ const productRouter = express.Router();
 productRouter.get(
   "/",
   expressAsyncHandler(async (req, res) => {
-    const { name, category, order, min, max, rating } = req.query;
+    try {
+      const { name, category, order, min, max, rating } = req.query;
 
-    const sortOrder =
-      order === "lowest" ? "p.price ASC"
-      : order === "highest" ? "p.price DESC"
-      : order === "toprated" ? "p.rating DESC"
-      : "p.id ASC";
+      const sortOrder =
+        order === "lowest" ? "p.price ASC"
+        : order === "highest" ? "p.price DESC"
+        : order === "toprated" ? "p.rating DESC"
+        : "p.id ASC";
 
-    const products = await sql`
-      SELECT p.id, p.name, p.image, p.brand, p.category, p.description,
-             p.price, p.count_in_stock, p.rating, p.num_reviews,
-             p.seller_id, p.is_active, p.created_at, p.updated_at
-      FROM products p
-      JOIN sellers s ON p.seller_id = s.id
-      WHERE p.is_active = true AND s.is_active_store = true
-      ${name && sql`AND p.name ILIKE ${'%' + name + '%'}`}
-      ${category && sql`AND p.category = ${category}`}
-      ${min && Number(min) !== 0 && sql`AND p.price >= ${Number(min)}`}
-      ${max && Number(max) !== 0 && sql`AND p.price <= ${Number(max)}`}
-      ${rating && Number(rating) !== 0 && sql`AND p.rating >= ${Number(rating)}`}
-      ORDER BY ${sortOrder}
-    `;
+      const products = await sql`
+        SELECT p.id, p.name, p.image, p.brand, p.category, p.description,
+               p.price, p.count_in_stock, p.rating, p.num_reviews,
+               p.seller_id, p.is_active, p.created_at, p.updated_at
+        FROM products p
+        JOIN sellers s ON p.seller_id = s.id
+        WHERE p.is_active = true AND s.is_active_store = true
+        ${name ? sql`AND p.name ILIKE ${'%' + name + '%'}` : sql``}
+        ${category ? sql`AND p.category = ${category}` : sql``}
+        ${min !== undefined && Number(min) !== 0 ? sql`AND p.price >= ${Number(min)}` : sql``}
+        ${max !== undefined && Number(max) !== 0 ? sql`AND p.price <= ${Number(max)}` : sql``}
+        ${rating !== undefined && Number(rating) !== 0 ? sql`AND p.rating >= ${Number(rating)}` : sql``}
+        ORDER BY ${sortOrder}
+      `;
 
-    // Convert DECIMAL → Number so frontend gets native JS numbers
-    const formatted = products.map((p) => ({
-      id:        p.id,
-      name:      p.name,
-      image:     p.image,
-      brand:     p.brand,
-      category:  p.category,
-      description: p.description,
-      price:     parseFloat(p.price),
-      count_in_stock: p.count_in_stock,
-      rating:    parseFloat(p.rating),
-      num_reviews: p.num_reviews,
-      seller_id: p.seller_id,
-      is_active: p.is_active,
-      created_at: p.created_at,
-      updated_at: p.updated_at,
-    }));
+      const formatted = products.map((p) => ({
+        ...p,
+        price: parseFloat(p.price),
+        count_in_stock: Number(p.count_in_stock),
+        rating: parseFloat(p.rating),
+        num_reviews: Number(p.num_reviews),
+      }));
 
-    res.send(formatted);
+      res.send(formatted);
+    } catch (err) {
+      res.status(500).send({ message: err.message || "Internal server error" });
+    }
   })
 );
 

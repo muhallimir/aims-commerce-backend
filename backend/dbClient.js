@@ -1,12 +1,15 @@
 /**
- * Database client — single postgres.js connection for all PostgreSQL queries.
- * Replaces mongoose for data operations.
+ * Database client — postgres.js pool for Supabase pooler.
+ * Uses dotenv/config to load env vars at module load time.
  */
+import "dotenv/config";
 import postgres from "postgres";
 
-const sql = postgres(process.env.DATABASE_URL, {
+const url = process.env.DATABASE_URL || process.env.DIRECT_URL;
+
+const sql = postgres(url, {
   max: 10,
-  onnotice: () => {}, // suppress notices in production
+  onnotice: () => {},
 });
 
 export default sql;

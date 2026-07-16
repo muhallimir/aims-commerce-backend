@@ -5,7 +5,7 @@
  * Creates:
  *  2 users (admin + customer)
  *  1 seller   (linked to admin)
- *  16 products (linked to admin's seller)
+ *  15 products (linked to admin's seller)
  */
 
 import "dotenv/config";
@@ -53,7 +53,7 @@ async function main() {
   const admin = (await sql`
     INSERT INTO "users" (id, name, email, password, is_admin, is_seller)
     VALUES (gen_random_uuid(), ${DATA.users[0].name}, ${DATA.users[0].email}, ${DATA.users[0].password}, true, true)
-    ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
+    ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, password = EXCLUDED.password, is_admin = EXCLUDED.is_admin, is_seller = EXCLUDED.is_seller
     RETURNING *;
   `)[0];
   console.log(`  Admin: ${admin.name} (${admin.email})`);
@@ -61,22 +61,23 @@ async function main() {
   const customer = (await sql`
     INSERT INTO "users" (id, name, email, password, is_admin, is_seller)
     VALUES (gen_random_uuid(), ${DATA.users[1].name}, ${DATA.users[1].email}, ${DATA.users[1].password}, false, false)
-    ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
+    ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, password = EXCLUDED.password
     RETURNING *;
   `)[0];
   console.log(`  Customer: ${customer.name} (${customer.email})`);
 
   // Step 2: Create seller for admin
-  console.log("[2/4] Creating seller profile for admin...");
-  const storeName = `${admin.name}'s Store`;
+  console.log("[2/4] Creating/finding seller profile for admin...");
+  let seller = (await sql`SELECT * FROM "sellers" WHERE "user_id" = ${admin.id} LIMIT 1;`)[0];
   
-  await sql`
-    INSERT INTO "sellers" (id, "user_id", name, "store_name", "is_active_store", rating, "num_reviews", "products_ids")
-    VALUES (gen_random_uuid(), ${admin.id}, ${admin.name}, ${storeName}, false, 0, 0, ARRAY[]::text[])`;
-  
-  const seller = (await sql`
-    SELECT * FROM "sellers" WHERE "user_id" = ${admin.id} LIMIT 1;
-  `)[0];
+  if (!seller) {
+    const storeName = `${admin.name}'s Store`;
+    seller = (await sql`
+      INSERT INTO "sellers" (id, "user_id", name, "store_name", "is_active_store", rating, "num_reviews", "products_ids")
+      VALUES (gen_random_uuid(), ${admin.id}, ${admin.name}, ${storeName}, false, 0, 0, ARRAY[]::text[])
+      RETURNING *;
+    `)[0];
+  }
   console.log(`  Seller: ${seller.name} (${seller.id.slice(0, 8)}...)`);
 
   // Step 3: Link admin to seller
@@ -86,25 +87,28 @@ async function main() {
 
   // Step 4: Create products
   console.log("[4/4] Seeding products...");
-  let count = 0;
+  let insertedCount = 0;
   for (const p of DATA.products) {
-    await sql`
+    const result = await sql`
       INSERT INTO "products" (id, name, image, brand, category, description, price, "count_in_stock", rating, "num_reviews", "seller_id", "is_active")
       VALUES (gen_random_uuid(), ${p.name}, ${p.image}, ${p.brand}, ${p.category}, ${p.description}, ${p.price}, ${p.countInStock}, 0, 0, ${seller.id}, true)
-      ON CONFLICT (name) DO NOTHING`;
-    count++;
+      ON CONFLICT (name) DO NOTHING RETURNING id`;
+    if (result.length > 0) insertedCount++;
   }
-  console.log(`  Seeded ${count} products`);
+  console.log(`  Inserted ${insertedCount} products (skipped duplicates)`);
 
   // Summary
-  const [userCount, sellerCount, productCount] = await sql`
-    SELECT (SELECT COUNT(*) FROM "users") as cnt1, (SELECT COUNT(*) FROM "sellers") as cnt2, (SELECT COUNT(*) FROM "products") as cnt3`;
+  const summary = await sql`
+    SELECT
+      (SELECT COUNT(*) FROM "users") as users,
+      (SELECT COUNT(*) FROM "sellers") as sellers,
+      (SELECT COUNT(*) FROM "products") as products`;
   
   console.log("\n═══════════════════════════════════════");
   console.log("  Seed Complete");
-  console.log(`  Users:     ${userCount.cnt1}`);
-  console.log(`  Sellers:   ${sellerCount.cnt2}`);
-  console.log(`  Products:  ${productCount.cnt3}`);
+  console.log(`  Users:     ${summary[0].users}`);
+  console.log(`  Sellers:   ${summary[0].sellers}`);
+  console.log(`  Products:  ${summary[0].products}`);
   console.log("═══════════════════════════════════════\n");
 
   await sql.end();
