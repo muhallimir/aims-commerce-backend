@@ -2,13 +2,12 @@ import http from "http";
 import { Server } from "socket.io";
 import express from "express";
 import dotenv from "dotenv";
-import mongoose from "mongoose";
+
 import productRouter from "./routers/productRouter.js";
 import userRouter from "./routers/userRouter.js";
 import orderRouter from "./routers/orderRouter.js";
 import uploadRouter from "./routers/uploadRouter.js";
 import sellerRouter from "./routers/sellerRouter.js";
-import path from "path";
 import cors from "cors"
 
 dotenv.config();
@@ -16,18 +15,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-mongoose.connect(process.env.MONGODB_URL, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-  useCreateIndex: true,
-});
+
 
 // image router for uploads
 app.use("/api/uploads", uploadRouter);
 
-// server request for users mongodb
+// Socket.IO server kept for live chat (migrate to Supabase Realtime later)
 app.use("/api/users", userRouter);
-// server request for products mongodb
+// Product routes (uses postgres.js via productRouter)
 app.use("/api/products", productRouter);
 
 // server request for createdOrders
@@ -56,10 +51,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).send({ message: err.message });
 });
 
-// uploadrouter path
-const __dirname = path.resolve();
-
-app.use("/uploads", express.static(path.join(__dirname, "/uploads")));
+// MongoDB uploads folder removed — using Supabase Storage instead
 
 const port = process.env.PORT || 5003;
 const httpServer = http.Server(app);
