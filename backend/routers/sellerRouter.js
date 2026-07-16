@@ -1,641 +1,633 @@
 import express from "express";
-import asyncHandler from "express-async-handler";
-import Seller from "../models/sellerModel.js";
-import Product from "../models/productModel.js";
-import Order from "../models/orderModel.js";
-import User from "../models/userModel.js";
-import { isAuth, isSeller, generateToken } from "../utils.js";
+import expressAsyncHandler from "express-async-handler";
+import sql from "../dbClient.js";
+import { generateToken, isAdmin, isAuth, isSeller } from "../utils.js";
 
 const sellerRouter = express.Router();
 
+// ========================
+// HELPERS
+// ========================
+
+const mapSeller = (s) => ({
+  _id:              s.id,
+  name:             s.name,
+  email:            "",    // populated from user table
+  isSeller:         true,
+  storeName:        s.store_name || "",
+  storeDescription: s.store_description || "",
+  profileImage:     s.profile_image || "",
+  isActiveStore:    s.is_active_store || false,
+  createdAt:        s.created_at,
+  updatedAt:        s.updated_at,
+});
+
+const findSellerByUser = async (userId) => {
+  return (
+    await sql`
+      SELECT * FROM "sellers" WHERE "user" = ${userId}
+    `
+  )[0] || null;
+};
+
+const ensureIsSeller = async (userId, user) => {
+  const seller = await findSellerByUser(userId);
+  if (!seller) {
+    return { error: { status: 404, message: "Seller not found" }, seller: null };
+  }
+  return { error: null, seller };
+};
+
+// ========================
 // POST /api/sellers/become — Customer becomes a seller
+// ========================
 sellerRouter.post(
-    "/become",
-    isAuth,
-    asyncHandler(async (req, res) => {
-        try {
-            const { name, storeName } = req.body;
+  "/become",
+  isAuth,
+  expressAsyncHandler(async (req, res) => {
+    try {
+      const { name, storeName } = req.body;
+      if (!name) {
+        return res.status(400).json({ message: "Name is required" });
+      }
 
-            if (!name) {
-                return res.status(400).json({ message: "Name is required" });
-            }
+      // Fetch user and create seller in a transaction
+      const user = (
+        await sql`
+          SELECT * FROM "users" WHERE id = ${req.user._id}
+        `
+      )[0];
 
-            // Get user from token
-            const user = await User.findById(req.user._id);
-            if (!user) {
-                return res.status(404).json({ message: "User not found" });
-            }
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
 
-            if (user.isSeller) {
-                return res.status(400).json({ message: "User is already a seller" });
-            }
+      if (user.is_seller) {
+        return res.status(400).json({ message: "User is already a seller" });
+      }
 
-            // Update user to become seller
-            user.isSeller = true;
-            user.name = name;
-            user.storeName = storeName || `${name}'s Store`;
-            await user.save();
+      const storeNameVal = storeName || `${name}'s Store`;
 
-            // Generate new token with isSeller: true
-            const token = generateToken(user);
+      const result = await sql.begin(async (sql) => {
+        // Update user to become seller
+        const updatedUser = await sql`
+          UPDATE "users"
+          SET is_seller = true, store_name = ${storeNameVal}
+          WHERE id = ${req.user._id}
+          RETURNING *;
+        `;
 
-            // Get updated user with populated seller
-            const updatedUser = await User.findById(user._id).populate('seller');
+        // Create seller profile (using the user's name from req)
+        const newSeller = await sql`
+          INSERT INTO "sellers" (id, "user", name, "store_name", "is_active_store")
+          VALUES (gen_random_uuid(), ${req.user._id}, ${name}, ${storeNameVal}, true)
+          RETURNING *;
+        `;
 
-            res.status(201).json({
-                message: "Successfully became a seller",
-                user: {
-                    _id: updatedUser._id,
-                    name: updatedUser.name,
-                    email: updatedUser.email,
-                    isSeller: updatedUser.isSeller,
-                    storeName: updatedUser.storeName,
-                    createdAt: updatedUser.createdAt,
-                    updatedAt: updatedUser.updatedAt,
-                },
-                token
-            });
-        } catch (err) {
-            console.error("Error in /api/sellers/become:", err);
-            res.status(500).json({
-                message: "Internal server error",
-                error: err.message
-            });
-        }
-    })
+        // Update user's seller_id reference
+        await sql`
+          UPDATE "users" SET "seller" = ${newSeller[0].id}
+          WHERE id = ${req.user._id};
+        `;
+
+        return { user: updatedUser[0], seller: newSeller[0] };
+      });
+
+      const token = generateToken({
+        _id:          result.user.id,
+        name:         result.user.name,
+        email:        result.user.email,
+        isAdmin:      result.user.is_admin,
+        isSeller:     true,
+      });
+
+      res.status(201).json({
+        message:  "Successfully became a seller",
+        user: {
+          _id:          result.user.id,
+          name:         result.user.name,
+          email:        result.user.email,
+          isSeller:     result.user.is_seller,
+          storeName:    result.user.store_name,
+          createdAt:    result.user.created_at,
+          updatedAt:    result.user.updated_at,
+        },
+        token,
+      });
+    } catch (err) {
+      console.error("Error in /api/sellers/become:", err);
+      res.status(500).json({ message: "Internal server error", error: err.message });
+    }
+  })
 );
 
+// ========================
 // GET /api/sellers/analytics — Get seller analytics
+// ========================
 sellerRouter.get(
-    "/analytics",
-    isAuth,
-    isSeller,
-    asyncHandler(async (req, res) => {
-        try {
-            const user = await User.findById(req.user._id).populate('seller');
-            if (!user || !user.seller) {
-                return res.status(404).json({ message: "Seller not found" });
-            }
+  "/analytics",
+  isAuth,
+  isSeller,
+  expressAsyncHandler(async (req, res) => {
+    try {
+      const { error, seller } = await ensureIsSeller(req.user._id, req.user);
+      if (error) return res.status(error.status).json({ message: error.message });
 
-            const sellerId = user.seller._id;
+      const sellerId = seller.id;
 
-            // Get total revenue from paid orders
-            const revenueResult = await Order.aggregate([
-                { $unwind: "$orderItems" },
-                {
-                    $match: {
-                        "orderItems.seller": sellerId,
-                        "isPaid": true
-                    }
-                },
-                {
-                    $group: {
-                        _id: null,
-                        totalRevenue: { $sum: { $multiply: ["$orderItems.price", "$orderItems.qty"] } }
-                    }
-                }
-            ]);
+      // Total revenue from paid orders (via order_items)
+      const revenueResult = await sql`
+        SELECT COALESCE(SUM(oi.price * oi.qty), 0) AS total_revenue
+        FROM order_items oi
+        JOIN orders o ON oi.order = o.id
+        WHERE oi.seller = ${sellerId}
+          AND o.is_paid = true
+      `;
 
-            // Get total orders count
-            const totalOrders = await Order.countDocuments({
-                "orderItems.seller": sellerId,
-                "isPaid": true
-            });
+      // Total paid orders count
+      const totalOrders = await sql`
+        SELECT COUNT(DISTINCT o.id) AS count
+        FROM order_items oi
+        JOIN orders o ON oi.order = o.id
+        WHERE oi.seller = ${sellerId}
+          AND o.is_paid = true
+      `;
 
-            // Get total products count
-            const totalProducts = await Product.countDocuments({
-                seller: sellerId
-            });
+      // Total products count
+      const totalProducts = await sql`
+        SELECT COUNT(*) AS count FROM "products" WHERE "seller" = ${sellerId}
+      `;
 
-            // Get monthly revenue (last 12 months)
-            const monthlyRevenueResult = await Order.aggregate([
-                { $unwind: "$orderItems" },
-                {
-                    $match: {
-                        "orderItems.seller": sellerId,
-                        "isPaid": true,
-                        "paidAt": { $gte: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000) }
-                    }
-                },
-                {
-                    $group: {
-                        _id: {
-                            year: { $year: "$paidAt" },
-                            month: { $month: "$paidAt" }
-                        },
-                        sales: { $sum: { $multiply: ["$orderItems.price", "$orderItems.qty"] } }
-                    }
-                },
-                { $sort: { "_id.year": 1, "_id.month": 1 } }
-            ]);
+      // Monthly revenue (last 12 months)
+      const monthlyRevenueRaw = await sql`
+        SELECT 
+          EXTRACT(YEAR FROM o.paid_at)::int AS year,
+          EXTRACT(MONTH FROM o.paid_at)::int AS month,
+          SUM(oi.price * oi.qty) AS sales
+        FROM order_items oi
+        JOIN orders o ON oi.order = o.id
+        WHERE oi.seller = ${sellerId}
+          AND o.is_paid = true
+          AND o.paid_at >= NOW() - INTERVAL '12 months'
+        GROUP BY EXTRACT(YEAR FROM o.paid_at), EXTRACT(MONTH FROM o.paid_at)
+        ORDER BY year ASC, month ASC
+      `;
 
-            // Format monthly revenue data
-            const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-            const monthlyRevenue = monthlyRevenueResult.map(item => ({
-                name: monthNames[item._id.month - 1],
-                sales: item.sales
-            }));
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const monthlyRevenue = monthlyRevenueRaw.map((item) => ({
+        name: monthNames[item.month - 1],
+        sales: item.sales,
+      }));
 
-            res.json({
-                totalRevenue: revenueResult.length > 0 ? revenueResult[0].totalRevenue : 0,
-                totalOrders,
-                totalProducts,
-                monthlyRevenue
-            });
-        } catch (err) {
-            console.error("Error in /api/sellers/analytics:", err);
-            res.status(500).json({
-                message: "Internal server error",
-                error: err.message
-            });
-        }
-    })
+      res.json({
+        totalRevenue:    Number(revenueResult[0].total_revenue),
+        totalOrders:     Number(totalOrders[0].count),
+        totalProducts:   Number(totalProducts[0].count),
+        monthlyRevenue,
+      });
+    } catch (err) {
+      console.error("Error in /api/sellers/analytics:", err);
+      res.status(500).json({ message: "Internal server error", error: err.message });
+    }
+  })
 );
 
+// ========================
 // GET /api/sellers/products — Get seller's products
+// ========================
 sellerRouter.get(
-    "/products",
-    isAuth,
-    isSeller,
-    asyncHandler(async (req, res) => {
-        try {
-            const user = await User.findById(req.user._id).populate('seller');
-            if (!user || !user.seller) {
-                return res.status(404).json({ message: "Seller not found" });
-            }
+  "/products",
+  isAuth,
+  isSeller,
+  expressAsyncHandler(async (req, res) => {
+    try {
+      const { error, seller } = await ensureIsSeller(req.user._id, req.user);
+      if (error) return res.status(error.status).json({ message: error.message });
 
-            // Query products directly by seller ID for better accuracy
-            const products = await Product.find({ seller: user.seller._id });
-            res.json(products || []);
-        } catch (err) {
-            console.error("Error in /api/sellers/products:", err);
-            res.status(500).json({
-                message: "Internal server error",
-                error: err.message
-            });
-        }
-    })
+      const products = await sql`
+        SELECT * FROM "products" WHERE "seller" = ${seller.id} ORDER BY created_at DESC
+      `;
+
+      res.json(products || []);
+    } catch (err) {
+      console.error("Error in /api/sellers/products:", err);
+      res.status(500).json({ message: "Internal server error", error: err.message });
+    }
+  })
 );
 
+// ========================
 // POST /api/sellers/products — Create new product
+// ========================
 sellerRouter.post(
-    "/products",
-    isAuth,
-    isSeller,
-    asyncHandler(async (req, res) => {
-        try {
-            const { name, price, category, brand, countInStock, description, image } = req.body;
+  "/products",
+  isAuth,
+  isSeller,
+  expressAsyncHandler(async (req, res) => {
+    try {
+      const { name, price, category, brand, countInStock, description, image } = req.body;
 
-            // Validate required fields
-            if (!name || !price || !category || !brand || countInStock === undefined || !description) {
-                return res.status(400).json({
-                    message: "Missing required fields: name, price, category, brand, countInStock, description"
-                });
-            }
+      if (!name || !price || !category || !brand || countInStock === undefined || !description) {
+        return res.status(400).json({
+          message:
+            "Missing required fields: name, price, category, brand, countInStock, description",
+        });
+      }
 
-            const user = await User.findById(req.user._id).populate('seller');
-            if (!user || !user.seller) {
-                return res.status(404).json({ message: "Seller not found" });
-            }
+      const { error, seller } = await ensureIsSeller(req.user._id, req.user);
+      if (error) return res.status(error.status).json({ message: error.message });
 
-            const product = new Product({
-                name,
-                price,
-                category,
-                brand,
-                countInStock,
-                description,
-                image: image || '/images/default-product.jpg',
-                seller: user.seller._id,
-                isActive: true,
-                rating: 0,
-                numReviews: 0,
-                reviews: []
-            });
+      const result = await sql.begin(async (s) => {
+        // Create product
+        const product = await s`
+          INSERT INTO "products" 
+            (id, name, image, brand, category, description, price, "count_in_stock", rating, "num_reviews", "seller_id", "is_active")
+          VALUES 
+            (gen_random_uuid(), ${name}, ${image || '/images/default-product.jpg'}, ${brand}, ${category}, 
+             ${description}, ${price}, ${countInStock}, 0, 0, ${seller.id}, true)
+          RETURNING *;
+        `;
 
-            const savedProduct = await product.save();
+        // Add product to seller's products_ids array (ON CONFLICT for duplicate name)
+        await s`
+          UPDATE "sellers" 
+          SET "products_ids" = array_append("products_ids", ${product[0].id}),
+              "is_active_store" = true
+          WHERE id = ${seller.id};
+        `;
 
-            // Add product to seller's products array
-            await Seller.findByIdAndUpdate(
-                user.seller._id,
-                { $addToSet: { products: savedProduct._id } },
-                { new: true }
-            );
+        return { product: product[0] };
+      });
 
-            // Check if this is the seller's first product - if so, activate their store
-            const productCount = await Product.countDocuments({ seller: user.seller._id });
-            if (productCount === 1 && !user.seller.isActiveStore) {
-                await Seller.findByIdAndUpdate(
-                    user.seller._id,
-                    { $set: { isActiveStore: true } },
-                    { new: true }
-                );
-            }
-
-            res.status(201).json({
-                message: "Product created successfully",
-                product: savedProduct
-            });
-        } catch (err) {
-            console.error("Error in /api/sellers/products POST:", err);
-            if (err.name === 'ValidationError') {
-                res.status(400).json({
-                    message: "Validation error",
-                    error: err.message
-                });
-            } else if (err.code === 11000) {
-                res.status(400).json({
-                    message: "Product name already exists",
-                    error: "Duplicate product name"
-                });
-            } else {
-                res.status(500).json({
-                    message: "Internal server error",
-                    error: err.message
-                });
-            }
-        }
-    })
+      res.status(201).json({ message: "Product created successfully", product: result.product });
+    } catch (err) {
+      console.error("Error in /api/sellers/products POST:", err);
+      res.status(500).json({ message: "Internal server error", error: err.message });
+    }
+  })
 );
 
+// ========================
 // PUT /api/sellers/products/:productId — Update product
+// ========================
 sellerRouter.put(
-    "/products/:productId",
-    isAuth,
-    isSeller,
-    asyncHandler(async (req, res) => {
-        try {
-            const { name, price, category, brand, countInStock, description, image, isActive } = req.body;
+  "/products/:productId",
+  isAuth,
+  isSeller,
+  expressAsyncHandler(async (req, res) => {
+    try {
+      const { name, price, category, brand, countInStock, description, image, isActive } = req.body;
 
-            const user = await User.findById(req.user._id).populate('seller');
-            if (!user || !user.seller) {
-                return res.status(404).json({ message: "Seller not found" });
-            }
+      const { error, seller } = await ensureIsSeller(req.user._id, req.user);
+      if (error) return res.status(error.status).json({ message: error.message });
 
-            const product = await Product.findOne({
-                _id: req.params.productId,
-                seller: user.seller._id
-            });
+      // Verify product belongs to this seller
+      const existing = await sql`
+        SELECT * FROM "products" WHERE id = ${req.params.productId} AND "seller" = ${seller.id}
+      `;
 
-            if (!product) {
-                return res.status(404).json({ message: "Product not found" });
-            }
+      if (!existing[0]) {
+        return res.status(404).json({ message: "Product not found" });
+      }
 
-            // Update fields if provided
-            if (name !== undefined) product.name = name;
-            if (price !== undefined) product.price = price;
-            if (category !== undefined) product.category = category;
-            if (brand !== undefined) product.brand = brand;
-            if (countInStock !== undefined) product.countInStock = countInStock;
-            if (description !== undefined) product.description = description;
-            if (image !== undefined) product.image = image;
-            if (isActive !== undefined) product.isActive = isActive;
+      const product = await sql`
+        UPDATE "products"
+        SET name = COALESCE(${name}, name),
+            price = COALESCE(${price}, price),
+            category = COALESCE(${category}, category),
+            brand = COALESCE(${brand}, brand),
+            "count_in_stock" = COALESCE(${countInStock}, "count_in_stock"),
+            description = COALESCE(${description}, description),
+            image = COALESCE(${image}, image),
+            "is_active" = COALESCE(${isActive}, "is_active")
+        WHERE id = ${req.params.productId} AND "seller" = ${seller.id}
+        RETURNING *;
+      `;
 
-            const updatedProduct = await product.save();
-
-            res.json({
-                message: "Product updated successfully",
-                product: updatedProduct
-            });
-        } catch (err) {
-            console.error("Error in /api/sellers/products PUT:", err);
-            if (err.name === 'ValidationError') {
-                res.status(400).json({
-                    message: "Validation error",
-                    error: err.message
-                });
-            } else if (err.code === 11000) {
-                res.status(400).json({
-                    message: "Product name already exists",
-                    error: "Duplicate product name"
-                });
-            } else {
-                res.status(500).json({
-                    message: "Internal server error",
-                    error: err.message
-                });
-            }
-        }
-    })
+      res.json({ message: "Product updated successfully", product: product[0] });
+    } catch (err) {
+      console.error("Error in /api/sellers/products PUT:", err);
+      res.status(500).json({ message: "Internal server error", error: err.message });
+    }
+  })
 );
 
+// ========================
 // DELETE /api/sellers/products/:productId — Delete product
+// ========================
 sellerRouter.delete(
-    "/products/:productId",
-    isAuth,
-    isSeller,
-    asyncHandler(async (req, res) => {
-        try {
-            const user = await User.findById(req.user._id).populate('seller');
-            if (!user || !user.seller) {
-                return res.status(404).json({ message: "Seller not found" });
-            }
+  "/products/:productId",
+  isAuth,
+  isSeller,
+  expressAsyncHandler(async (req, res) => {
+    try {
+      const { error, seller } = await ensureIsSeller(req.user._id, req.user);
+      if (error) return res.status(error.status).json({ message: error.message });
 
-            const product = await Product.findOne({
-                _id: req.params.productId,
-                seller: user.seller._id
-            });
+      // Verify product belongs to this seller
+      const existing = await sql`
+        SELECT * FROM "products" WHERE id = ${req.params.productId} AND "seller" = ${seller.id}
+      `;
 
-            if (!product) {
-                return res.status(404).json({ message: "Product not found" });
-            }
+      if (!existing[0]) {
+        return res.status(404).json({ message: "Product not found" });
+      }
 
-            await Product.deleteOne({ _id: req.params.productId });
+      const result = await sql.begin(async (s) => {
+        // Delete product
+        await s`DELETE FROM "products" WHERE id = ${req.params.productId}`;
 
-            // Remove product from seller's products array
-            await Seller.findByIdAndUpdate(
-                user.seller._id,
-                { $pull: { products: req.params.productId } },
-                { new: true }
-            );
+        // Remove from seller products array
+        await s`
+          UPDATE "sellers"
+          SET "products_ids" = array_remove("products_ids", ${req.params.productId})
+          WHERE id = ${seller.id};
+        `;
+      });
 
-            res.json({ message: "Product deleted successfully" });
-        } catch (err) {
-            console.error("Error in /api/sellers/products DELETE:", err);
-            res.status(500).json({
-                message: "Internal server error",
-                error: err.message
-            });
-        }
-    })
+      res.json({ message: "Product deleted successfully" });
+    } catch (err) {
+      console.error("Error in /api/sellers/products DELETE:", err);
+      res.status(500).json({ message: "Internal server error", error: err.message });
+    }
+  })
 );
 
+// ========================
 // GET /api/sellers/orders — Get seller's orders
+// ========================
 sellerRouter.get(
-    "/orders",
-    isAuth,
-    isSeller,
-    asyncHandler(async (req, res) => {
-        try {
-            const user = await User.findById(req.user._id).populate('seller');
-            if (!user || !user.seller) {
-                return res.status(404).json({ message: "Seller not found" });
-            }
+  "/orders",
+  isAuth,
+  isSeller,
+  expressAsyncHandler(async (req, res) => {
+    try {
+      const { error, seller } = await ensureIsSeller(req.user._id, req.user);
+      if (error) return res.status(error.status).json({ message: error.message });
 
-            const orders = await Order.find({
-                "orderItems.seller": user.seller._id
-            }).populate('user', 'name email').sort({ createdAt: -1 });
+      // Get all orders containing this seller's items, with user info
+      const orders = await sql`
+        SELECT 
+          o.id,
+          o.is_paid,
+          o.is_delivered,
+          o.paid_at,
+          o.delivered_at,
+          o.created_at,
+          o."shipping_full_name",
+          o."shipping_contact",
+          o."shipping_address",
+          o."shipping_city",
+          o."shipping_postal_code",
+          o."shipping_country",
+          oi.name,
+          oi.qty,
+          oi.price,
+          oi.image,
+          oi.product,
+          u.name AS user_name,
+          u.email AS user_email
+        FROM order_items oi
+        JOIN orders o ON oi.order = o.id
+        JOIN users u ON o.user_id = u.id
+        WHERE oi.seller = ${seller.id}
+        ORDER BY o.created_at DESC
+      `;
 
-            // Filter and format order items for this seller only
-            const formattedOrders = orders.map(order => {
-                const sellerOrderItems = order.orderItems.filter(
-                    item => item.seller && item.seller.toString() === user.seller._id.toString()
-                );
-
-                return {
-                    _id: order._id,
-                    createdAt: order.createdAt,
-                    user: {
-                        name: order.user.name,
-                        email: order.user.email
-                    },
-                    shippingAddress: {
-                        fullName: order.shippingAddress.fullName,
-                        contactNo: order.shippingAddress.contact,
-                        address: order.shippingAddress.address,
-                        city: order.shippingAddress.city,
-                        postalCode: order.shippingAddress.postalCode,
-                        country: order.shippingAddress.country
-                    },
-                    orderItems: sellerOrderItems.map(item => ({
-                        name: item.name,
-                        quantity: item.qty,
-                        price: item.price,
-                        image: item.image,
-                        productId: item.product
-                    })),
-                    totalPrice: sellerOrderItems.reduce((sum, item) => sum + (item.price * item.qty), 0),
-                    isPaid: order.isPaid,
-                    isDelivered: order.isDelivered,
-                    paidAt: order.paidAt,
-                    deliveredAt: order.deliveredAt
-                };
-            });
-
-            res.json(formattedOrders);
-        } catch (err) {
-            console.error("Error in /api/sellers/orders:", err);
-            res.status(500).json({
-                message: "Internal server error",
-                error: err.message
-            });
+      // Group orders by order id (a single order may contain items from this seller)
+      const orderMap = new Map();
+      for (const row of orders) {
+        const oid = row.id;
+        if (!orderMap.has(oid)) {
+          orderMap.set(oid, {
+            _id: oid,
+            user: { name: row.user_name, email: row.user_email },
+            shippingAddress: {
+              fullName:   row.shipping_full_name,
+              contactNo:  row.shipping_contact,
+              address:    row.shipping_address,
+              city:       row.shipping_city,
+              postalCode: row.shipping_postal_code,
+              country:    row.shipping_country,
+            },
+            orderItems: [],
+            totalPrice: 0,
+            isPaid:   row.is_paid,
+            isDelivered: row.is_delivered,
+            paidAt:   row.paid_at,
+            deliveredAt: row.delivered_at,
+            createdAt: row.created_at,
+          });
         }
-    })
+        const order = orderMap.get(oid);
+        order.orderItems.push({
+          name:       row.name,
+          quantity:   row.qty,
+          price:      row.price,
+          image:      row.image,
+          productId:  row.product,
+        });
+        order.totalPrice += Number(row.price) * row.qty;
+      }
+
+      // Also get seller-specific totals from the order table
+      const results = Array.from(orderMap.values());
+      res.json(results);
+    } catch (err) {
+      console.error("Error in /api/sellers/orders:", err);
+      res.status(500).json({ message: "Internal server error", error: err.message });
+    }
+  })
 );
 
+// ========================
 // PUT /api/sellers/orders/:orderId/status — Update order status
+// ========================
 sellerRouter.put(
-    "/orders/:orderId/status",
-    isAuth,
-    isSeller,
-    asyncHandler(async (req, res) => {
-        try {
-            const { status, isDelivered, deliveredAt } = req.body;
+  "/orders/:orderId/status",
+  isAuth,
+  isSeller,
+  expressAsyncHandler(async (req, res) => {
+    try {
+      const { isDelivered, deliveredAt } = req.body;
 
-            const user = await User.findById(req.user._id).populate('seller');
-            if (!user || !user.seller) {
-                return res.status(404).json({ message: "Seller not found" });
-            }
+      const { error, seller } = await ensureIsSeller(req.user._id, req.user);
+      if (error) return res.status(error.status).json({ message: error.message });
 
-            const order = await Order.findOne({
-                _id: req.params.orderId,
-                "orderItems.seller": user.seller._id
-            });
+      // Verify order contains this seller's items
+      const orderItems = await sql`
+        SELECT COUNT(*) AS count FROM order_items 
+        WHERE order = ${req.params.orderId} AND seller = ${seller.id}
+      `;
 
-            if (!order) {
-                return res.status(404).json({ message: "Order not found" });
-            }
+      if (!orderItems[0] || Number(orderItems[0].count) === 0) {
+        return res.status(404).json({ message: "Order not found" });
+      }
 
-            // Update order status
-            if (isDelivered !== undefined) {
-                order.isDelivered = isDelivered;
-            }
-            if (deliveredAt !== undefined) {
-                order.deliveredAt = deliveredAt;
-            } else if (isDelivered === true) {
-                order.deliveredAt = new Date();
-            }
+      // Update order status
+      const deliveredAtVal = isDelivered ? (deliveredAt || new Date().toISOString()) : deliveredAt;
 
-            const updatedOrder = await order.save();
+      const updatedOrder = await sql`
+        UPDATE orders
+        SET is_delivered = COALESCE(${isDelivered}, is_delivered),
+            delivered_at = COALESCE(${deliveredAtVal}, delivered_at)
+        WHERE id = ${req.params.orderId}
+        RETURNING id, is_delivered, delivered_at, updated_at;
+      `;
 
-            res.json({
-                message: "Order status updated successfully",
-                order: {
-                    _id: updatedOrder._id,
-                    isDelivered: updatedOrder.isDelivered,
-                    deliveredAt: updatedOrder.deliveredAt,
-                    updatedAt: updatedOrder.updatedAt
-                }
-            });
-        } catch (err) {
-            console.error("Error in /api/sellers/orders PUT:", err);
-            res.status(500).json({
-                message: "Internal server error",
-                error: err.message
-            });
-        }
-    })
+      res.json({
+        message: "Order status updated successfully",
+        order: {
+          _id:         updatedOrder[0].id,
+          isDelivered: updatedOrder[0].is_delivered,
+          deliveredAt: updatedOrder[0].delivered_at,
+          updatedAt:   updatedOrder[0].updated_at,
+        },
+      });
+    } catch (err) {
+      console.error("Error in /api/sellers/orders PUT:", err);
+      res.status(500).json({ message: "Internal server error", error: err.message });
+    }
+  })
 );
 
+// ========================
 // PUT /api/sellers/profile — Update seller profile
+// ========================
 sellerRouter.put(
-    "/profile",
-    isAuth,
-    isSeller,
-    asyncHandler(async (req, res) => {
-        try {
-            const {
-                userId,
-                name,
-                storeName,
-                storeDescription,
-                phone,
-                address,
-                city,
-                country,
-                isActiveStore
-            } = req.body;
+  "/profile",
+  isAuth,
+  isSeller,
+  expressAsyncHandler(async (req, res) => {
+    try {
+      const {
+        name,
+        storeName,
+        storeDescription,
+        phone,
+        address,
+        city,
+        country,
+        isActiveStore,
+      } = req.body;
 
-            // Validate required fields
-            if (!name || !storeName) {
-                return res.status(400).json({
-                    message: "Missing required fields: name and storeName are required"
-                });
-            }
+      if (!name || !storeName) {
+        return res.status(400).json({
+          message: "Missing required fields: name and storeName are required",
+        });
+      }
 
-            // For security, only allow users to update their own profile
-            // Use userId from request body, but verify it matches the authenticated user
-            const targetUserId = userId || req.user._id;
+      const { error, seller } = await ensureIsSeller(req.user._id, req.user);
+      if (error) return res.status(error.status).json({ message: error.message });
 
-            // Verify the user exists and is a seller
-            const user = await User.findById(targetUserId);
-            if (!user) {
-                return res.status(404).json({ message: "User not found" });
-            }
+      const result = await sql.begin(async (s) => {
+        // Update User table fields
+        const updatedUser = await s`
+          UPDATE "users"
+          SET name = ${name},
+              phone = COALESCE(${phone}, phone),
+              address = COALESCE(${address}, address),
+              city = COALESCE(${city}, city),
+              country = COALESCE(${country}, country),
+              store_name = COALESCE(${storeName}, store_name)
+          WHERE id = ${req.user._id} AND is_seller = true
+          RETURNING *;
+        `;
 
-            if (!user.isSeller) {
-                return res.status(400).json({ message: "User is not a seller" });
-            }
+        // Update Seller table fields
+        const updatedSellerData = {
+          name:    name,
+          user:    req.user._id,
+        };
+        if (storeName !== undefined) updatedSellerData["store_name"] = storeName;
+        if (storeDescription !== undefined) updatedSellerData["store_description"] = storeDescription;
+        if (isActiveStore !== undefined) updatedSellerData["is_active_store"] = isActiveStore;
 
-            // Security check: users can only update their own profile unless they're admin
-            if (targetUserId.toString() !== req.user._id.toString() && !req.user.isAdmin) {
-                return res.status(403).json({
-                    message: "Access denied. You can only update your own profile"
-                });
-            }
+        const updatedSeller = await s`
+          UPDATE "sellers"
+          SET name = ${name},
+              store_name = COALESCE(${storeName}, store_name),
+              store_description = COALESCE(${storeDescription}, store_description),
+              "is_active_store" = COALESCE(${isActiveStore}, "is_active_store")
+          WHERE id = ${seller.id}
+          RETURNING *;
+        `;
 
-            // Update User table fields (name, phone, address, city, country)
-            const userUpdateData = { name };
-            if (phone !== undefined) userUpdateData.phone = phone;
-            if (address !== undefined) userUpdateData.address = address;
-            if (city !== undefined) userUpdateData.city = city;
-            if (country !== undefined) userUpdateData.country = country;
-            if (storeName !== undefined) userUpdateData.storeName = storeName;
+        return { user: updatedUser[0], seller: updatedSeller[0] };
+      });
 
-            const updatedUser = await User.findByIdAndUpdate(
-                targetUserId,
-                { $set: userUpdateData },
-                { new: true, runValidators: true }
-            );
+      if (!result.user) {
+        return res.status(404).json({ message: "User not found" });
+      }
 
-            // Update Seller table fields (storeName, storeDescription, isActiveStore)
-            // The User model's pre-save hook will handle name and storeName sync
-            const sellerUpdateData = {};
-            if (storeName !== undefined) sellerUpdateData.storeName = storeName;
-            if (storeDescription !== undefined) sellerUpdateData.storeDescription = storeDescription;
-            if (name !== undefined) sellerUpdateData.name = name;
-            if (isActiveStore !== undefined) sellerUpdateData.isActiveStore = isActiveStore;
-
-            const updatedSeller = await Seller.findOneAndUpdate(
-                { user: targetUserId },
-                { $set: sellerUpdateData },
-                { new: true, runValidators: true }
-            );
-
-            if (!updatedSeller) {
-                return res.status(404).json({ message: "Seller profile not found" });
-            }
-
-            res.json({
-                message: "Seller profile updated successfully",
-                user: {
-                    _id: updatedUser._id,
-                    name: updatedUser.name,
-                    email: updatedUser.email,
-                    phone: updatedUser.phone,
-                    address: updatedUser.address,
-                    city: updatedUser.city,
-                    country: updatedUser.country,
-                    isSeller: updatedUser.isSeller,
-                    storeName: updatedUser.storeName,
-                    updatedAt: updatedUser.updatedAt
-                },
-                seller: {
-                    _id: updatedSeller._id,
-                    storeName: updatedSeller.storeName,
-                    storeDescription: updatedSeller.storeDescription,
-                    isActiveStore: updatedSeller.isActiveStore ?? false, // Handle undefined/null values
-                    updatedAt: updatedSeller.updatedAt
-                }
-            });
-        } catch (err) {
-            console.error("Error in /api/sellers/profile PUT:", err);
-            if (err.name === 'ValidationError') {
-                res.status(400).json({
-                    message: "Validation error",
-                    error: err.message
-                });
-            } else if (err.name === 'CastError') {
-                res.status(400).json({
-                    message: "Invalid user ID format",
-                    error: err.message
-                });
-            } else {
-                res.status(500).json({
-                    message: "Internal server error",
-                    error: err.message
-                });
-            }
-        }
-    })
+      res.json({
+        message: "Seller profile updated successfully",
+        user: {
+          _id:          result.user.id,
+          name:         result.user.name,
+          email:        result.user.email,
+          phone:        result.user.phone || "",
+          address:      result.user.address || "",
+          city:         result.user.city || "",
+          country:      result.user.country || "",
+          isSeller:     result.user.is_seller,
+          storeName:    result.user.store_name || "",
+          updatedAt:    result.user.updated_at,
+        },
+        seller: {
+          _id:              result.seller.id,
+          storeName:        result.seller.store_name || "",
+          storeDescription: result.seller.store_description || "",
+          isActiveStore:    result.seller.is_active_store || false,
+          updatedAt:        result.seller.updated_at,
+        },
+      });
+    } catch (err) {
+      console.error("Error in /api/sellers/profile PUT:", err);
+      res.status(500).json({ message: "Internal server error", error: err.message });
+    }
+  })
 );
 
+// ========================
 // GET /api/sellers/:sellerId — Get seller info
+// ========================
 sellerRouter.get(
-    "/:sellerId",
-    isAuth,
-    asyncHandler(async (req, res) => {
-        try {
-            const seller = await Seller.findById(req.params.sellerId).populate("user", "name email");
+  "/:sellerId",
+  isAuth,
+  expressAsyncHandler(async (req, res) => {
+    try {
+      const seller = await sql`
+        SELECT * FROM "sellers" WHERE id = ${req.params.sellerId}
+      `;
 
-            if (!seller) {
-                return res.status(404).json({ message: "Seller not found" });
-            }
+      if (!seller[0]) {
+        return res.status(404).json({ message: "Seller not found" });
+      }
 
-            // Get user data for additional fields
-            const userData = await User.findById(seller.user._id);
+      // Get user data for email
+      const userData = await sql`
+        SELECT id, name, email FROM "users" WHERE id = ${seller[0].user_id}
+      `;
 
-            res.json({
-                _id: seller._id,
-                name: seller.name,
-                email: seller.user.email,
-                isSeller: true,
-                storeName: seller.storeName,
-                storeDescription: seller.storeDescription,
-                profileImage: seller.profileImage,
-                isActiveStore: seller.isActiveStore ?? false, // Handle undefined/null values
-                createdAt: seller.createdAt,
-                updatedAt: seller.updatedAt
-            });
-        } catch (err) {
-            console.error("Error in /api/sellers/:sellerId:", err);
-            res.status(500).json({
-                message: "Internal server error",
-                error: err.message
-            });
-        }
-    })
+      res.json({
+        _id:              seller[0].id,
+        name:             seller[0].name,
+        email:            userData[0]?.email || "",
+        isSeller:         true,
+        storeName:        seller[0].store_name || "",
+        storeDescription: seller[0].store_description || "",
+        profileImage:     seller[0].profile_image || "",
+        isActiveStore:    seller[0].is_active_store || false,
+        createdAt:        seller[0].created_at,
+        updatedAt:        seller[0].updated_at,
+      });
+    } catch (err) {
+      console.error("Error in /api/sellers/:sellerId:", err);
+      res.status(500).json({ message: "Internal server error", error: err.message });
+    }
+  })
 );
 
 export default sellerRouter;
