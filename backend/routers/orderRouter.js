@@ -8,9 +8,11 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const orderRouter = express.Router();
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2022-11-15",
-});
+const stripe = process.env.STRIPE_SECRET_KEY
+  ? new Stripe(process.env.STRIPE_SECRET_KEY, {
+      apiVersion: "2022-11-15",
+    })
+  : null;
 
 // ────────────────────────────────────────────
 // Helper — build order response from DB row + items
@@ -24,12 +26,12 @@ const buildOrderResponse = (order, items, userInfo) => ({
     email: userInfo?.email || "",
   },
   orderItems: items.map((item) => ({
-    product: item.product,
+    product: item.product_id,
     name:    item.name,
     qty:     item.qty,
     price:   Number(item.price),
     image:   item.image,
-    seller:  item.seller,
+    seller:  item.seller_id,
   })),
   itemsPrice:    Number(order.items_price),
   shippingPrice: Number(order.shipping_price),
@@ -74,8 +76,8 @@ orderRouter.get(
     // Fetch items for all orders in one query
     const orderIds = orders.map((o) => o.id);
     const allItems = await sql`
-      SELECT "order" as order_id, product, seller, name, qty, price, "image"
-      FROM order_items WHERE "order" = ANY(${orderIds})
+      SELECT "order_id" as order_id, product_id, seller_id, name, qty, price, "image"
+      FROM order_items WHERE "order_id" = ANY(${orderIds})
     `;
 
     // Group items by order
@@ -83,12 +85,12 @@ orderRouter.get(
     for (const item of allItems) {
       if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
       itemsByOrder[item.order_id].push({
-        product: item.product,
+        product: item.product_id,
         name: item.name,
         qty: item.qty,
         price: Number(item.price),
         image: item.image,
-        seller: item.seller,
+        seller: item.seller_id,
       });
     }
 
@@ -177,16 +179,16 @@ orderRouter.get(
 
     const orderIds = allItems.map((o) => o.id);
     const items = await sql`
-      SELECT "order" as order_id, product, seller, name, qty, price, "image"
-      FROM order_items WHERE "order" = ANY(${orderIds})
+      SELECT "order_id" as order_id, product_id, seller_id, name, qty, price, "image"
+      FROM order_items WHERE "order_id" = ANY(${orderIds})
     `;
 
     const itemsByOrder = {};
     for (const item of items) {
       if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
       itemsByOrder[item.order_id].push({
-        product: item.product, name: item.name, qty: item.qty,
-        price: Number(item.price), image: item.image, seller: item.seller,
+        product: item.product_id, name: item.name, qty: item.qty,
+        price: Number(item.price), image: item.image, seller: item.seller_id,
       });
     }
 
@@ -236,16 +238,16 @@ orderRouter.get(
 
     const orderIds = allItems.map((o) => o.id);
     const items = await sql`
-      SELECT "order" as order_id, product, seller, name, qty, price, "image"
-      FROM order_items WHERE "order" = ANY(${orderIds})
+      SELECT "order_id" as order_id, product_id, seller_id, name, qty, price, "image"
+      FROM order_items WHERE "order_id" = ANY(${orderIds})
     `;
 
     const itemsByOrder = {};
     for (const item of items) {
       if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
       itemsByOrder[item.order_id].push({
-        product: item.product, name: item.name, qty: item.qty,
-        price: Number(item.price), image: item.image, seller: item.seller,
+        product: item.product_id, name: item.name, qty: item.qty,
+        price: Number(item.price), image: item.image, seller: item.seller_id,
       });
     }
 
@@ -297,8 +299,8 @@ orderRouter.get(
 
     const order = orderData[0];
     const items = await sql`
-      SELECT product, seller, name, qty, price, "image"
-      FROM order_items WHERE "order" = ${req.params.id}
+      SELECT product_id, seller_id, name, qty, price, "image"
+      FROM order_items WHERE "order_id" = ${req.params.id}
     `;
 
     res.send(buildOrderResponse(order, items, { name: order.user_name, email: order.user_email }));
@@ -356,7 +358,7 @@ orderRouter.post(
         // Create order items
         for (const item of req.body.orderItems) {
           await s`
-            INSERT INTO order_items (id, "order", product, seller, name, qty, "image", price)
+            INSERT INTO order_items (id, "order_id", product_id, seller_id, name, qty, "image", price)
             VALUES (gen_random_uuid(), ${order[0].id}, ${item.product},
                     ${sellerMap[item.product] || null}, ${item.name},
                     ${item.qty}, ${item.image}, ${item.price})
@@ -373,8 +375,8 @@ orderRouter.post(
 
         // Fetch items for response
         const items = (await s`
-          SELECT product, seller, name, qty, price, "image"
-          FROM order_items WHERE "order" = ${order[0].id}
+          SELECT product_id, seller_id, name, qty, price, "image"
+          FROM order_items WHERE "order_id" = ${order[0].id}
         `);
 
         return { order: fullOrder, items };
@@ -429,8 +431,8 @@ orderRouter.put(
     `;
 
     const items = await sql`
-      SELECT product, seller, name, qty, price, "image"
-      FROM order_items WHERE "order" = ${req.params.id}
+      SELECT product_id, seller_id, name, qty, price, "image"
+      FROM order_items WHERE "order_id" = ${req.params.id}
     `;
 
     res.send({
@@ -450,6 +452,9 @@ orderRouter.post(
   "/create-payment-intent",
   isAuth,
   expressAsyncHandler(async (req, res) => {
+    if (!stripe) {
+      return res.status(503).send({ message: "Stripe not configured" });
+    }
     const { amount } = req.body;
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(amount * 100),
@@ -469,7 +474,7 @@ orderRouter.delete(
   expressAsyncHandler(async (req, res) => {
     const result = await sql.begin(async (s) => {
       // Delete order items first (no ON DELETE CASCADE on orders FK)
-      await s`DELETE FROM order_items WHERE "order" = ${req.params.id}`;
+      await s`DELETE FROM order_items WHERE "order_id" = ${req.params.id}`;
       const deleted = await s`DELETE FROM orders WHERE id = ${req.params.id} RETURNING *`;
       return deleted[0];
     });
@@ -511,8 +516,8 @@ orderRouter.put(
     `;
 
     const items = await sql`
-      SELECT product, seller, name, qty, price, "image"
-      FROM order_items WHERE "order" = ${req.params.id}
+      SELECT product_id, seller_id, name, qty, price, "image"
+      FROM order_items WHERE "order_id" = ${req.params.id}
     `;
 
     res.send({

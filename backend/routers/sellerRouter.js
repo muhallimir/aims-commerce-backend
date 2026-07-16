@@ -25,7 +25,7 @@ const mapSeller = (s) => ({
 const findSellerByUser = async (userId) => {
   return (
     await sql`
-      SELECT * FROM "sellers" WHERE "user" = ${userId}
+      SELECT * FROM "sellers" WHERE "user_id" = ${userId}
     `
   )[0] || null;
 };
@@ -79,14 +79,14 @@ sellerRouter.post(
 
         // Create seller profile (using the user's name from req)
         const newSeller = await sql`
-          INSERT INTO "sellers" (id, "user", name, "store_name", "is_active_store")
+          INSERT INTO "sellers" (id, "user_id", name, "store_name", "is_active_store")
           VALUES (gen_random_uuid(), ${req.user._id}, ${name}, ${storeNameVal}, true)
           RETURNING *;
         `;
 
         // Update user's seller_id reference
         await sql`
-          UPDATE "users" SET "seller" = ${newSeller[0].id}
+          UPDATE "users" SET "seller_id" = ${newSeller[0].id}
           WHERE id = ${req.user._id};
         `;
 
@@ -155,7 +155,7 @@ sellerRouter.get(
 
       // Total products count
       const totalProducts = await sql`
-        SELECT COUNT(*) AS count FROM "products" WHERE "seller" = ${sellerId}
+        SELECT COUNT(*) AS count FROM "products" WHERE "seller_id" = ${sellerId}
       `;
 
       // Monthly revenue (last 12 months)
@@ -206,7 +206,7 @@ sellerRouter.get(
       if (error) return res.status(error.status).json({ message: error.message });
 
       const products = await sql`
-        SELECT * FROM "products" WHERE "seller" = ${seller.id} ORDER BY created_at DESC
+        SELECT * FROM "products" WHERE "seller_id" = ${seller.id} ORDER BY created_at DESC
       `;
 
       res.json(products || []);
@@ -284,7 +284,7 @@ sellerRouter.put(
 
       // Verify product belongs to this seller
       const existing = await sql`
-        SELECT * FROM "products" WHERE id = ${req.params.productId} AND "seller" = ${seller.id}
+        SELECT * FROM "products" WHERE id = ${req.params.productId} AND "seller_id" = ${seller.id}
       `;
 
       if (!existing[0]) {
@@ -301,7 +301,7 @@ sellerRouter.put(
             description = COALESCE(${description}, description),
             image = COALESCE(${image}, image),
             "is_active" = COALESCE(${isActive}, "is_active")
-        WHERE id = ${req.params.productId} AND "seller" = ${seller.id}
+        WHERE id = ${req.params.productId} AND "seller_id" = ${seller.id}
         RETURNING *;
       `;
 
@@ -327,7 +327,7 @@ sellerRouter.delete(
 
       // Verify product belongs to this seller
       const existing = await sql`
-        SELECT * FROM "products" WHERE id = ${req.params.productId} AND "seller" = ${seller.id}
+        SELECT * FROM "products" WHERE id = ${req.params.productId} AND "seller_id" = ${seller.id}
       `;
 
       if (!existing[0]) {
