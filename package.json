@@ -47,5 +47,6 @@
   "author": "Amirsali Muhalli",
   "license": "ISC",
   "description": "aims-commerce backend",
-  "repository": "https://github.com/muhallimir/aims-commerce-backend"
+  "repository": "https://github.com/muhallimir/aims-commerce-backend",
+  "packageManager": "npm@10.8.2"
 }
