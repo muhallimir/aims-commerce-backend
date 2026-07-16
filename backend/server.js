@@ -46,8 +46,13 @@ app.get("/api/config/google", (req, res) => {
   res.send(process.env.GOOGLE_API_KEY || "");
 });
 
-// Serve static files from uploads folder
-app.use("/uploads", express.static("../uploads"));
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Serve static files from uploads folder (resolve relative to server.js location)
+app.use("/uploads", express.static(join(__dirname, "..", "uploads")));
 
 // error catch for userRouter
 app.use((err, _req, res, _next) => {
