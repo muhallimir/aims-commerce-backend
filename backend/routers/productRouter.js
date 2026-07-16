@@ -1,288 +1,384 @@
 import express from "express";
 import expressAsyncHandler from "express-async-handler";
-import mongoose from "mongoose";
+import sql from "../dbClient.js";
 import data from "../data.js";
-import Product from "../models/productModel.js";
 import { isAdmin, isAuth } from "../utils.js";
 
 const productRouter = express.Router();
 
+// ========================
+// GET /api/products/ - List filtered products
+// ========================
 productRouter.get(
   "/",
   expressAsyncHandler(async (req, res) => {
-    const name = req.query.name || "";
-    const category = req.query.category || "";
-    const order = req.query.order || "";
-    const min =
-      req.query.min && Number(req.query.min) !== 0 ? Number(req.query.min) : 0;
-    const max =
-      req.query.max && Number(req.query.max) !== 0 ? Number(req.query.max) : 0;
-    const rating =
-      req.query.rating && Number(req.query.rating) !== 0
-        ? Number(req.query.rating)
-        : 0;
+    const { name, category, order, min, max, rating } = req.query;
 
-    const nameFilter = name ? { name: { $regex: name, $options: "i" } } : {};
-    const categoryFilter = category ? { category } : {};
-    const priceFilter = min && max ? { price: { $gte: min, $lte: max } } : {};
-    const ratingFilter = rating ? { rating: { $gte: rating } } : {};
     const sortOrder =
-      order === "lowest"
-        ? { price: 1 }
-        : order === "highest"
-          ? { price: -1 }
-          : order === "toprated"
-            ? { rating: -1 }
-            : { _id: 1 };
+      order === "lowest" ? "p.price ASC"
+      : order === "highest" ? "p.price DESC"
+      : order === "toprated" ? "p.rating DESC"
+      : "p.id ASC";
 
-    // Use aggregation to filter products by active stores
-    const products = await Product.aggregate([
-      {
-        $lookup: {
-          from: "sellers",
-          localField: "seller",
-          foreignField: "_id",
-          as: "sellerInfo"
-        }
-      },
-      {
-        $match: {
-          $and: [
-            nameFilter,
-            categoryFilter,
-            priceFilter,
-            ratingFilter,
-            { isActive: true }, // Product must be active
-            { "sellerInfo.isActiveStore": true } // Store must be active
-          ]
-        }
-      },
-      {
-        $project: {
-          sellerInfo: 0 // Remove seller info from response to keep original structure
-        }
-      },
-      {
-        $sort: sortOrder
-      }
-    ]);
+    const products = await sql`
+      SELECT p.id, p.name, p.image, p.brand, p.category, p.description,
+             p.price, p.count_in_stock, p.rating, p.num_reviews,
+             p.seller_id, p.is_active, p.created_at, p.updated_at
+      FROM products p
+      JOIN sellers s ON p.seller_id = s.id
+      WHERE p.is_active = true AND s.is_active_store = true
+      ${name && sql`AND p.name ILIKE ${'%' + name + '%'}`}
+      ${category && sql`AND p.category = ${category}`}
+      ${min && Number(min) !== 0 && sql`AND p.price >= ${Number(min)}`}
+      ${max && Number(max) !== 0 && sql`AND p.price <= ${Number(max)}`}
+      ${rating && Number(rating) !== 0 && sql`AND p.rating >= ${Number(rating)}`}
+      ORDER BY ${sortOrder}
+    `;
 
-    res.send(products);
+    // Convert DECIMAL → Number so frontend gets native JS numbers
+    const formatted = products.map((p) => ({
+      id:        p.id,
+      name:      p.name,
+      image:     p.image,
+      brand:     p.brand,
+      category:  p.category,
+      description: p.description,
+      price:     parseFloat(p.price),
+      count_in_stock: p.count_in_stock,
+      rating:    parseFloat(p.rating),
+      num_reviews: p.num_reviews,
+      seller_id: p.seller_id,
+      is_active: p.is_active,
+      created_at: p.created_at,
+      updated_at: p.updated_at,
+    }));
+
+    res.send(formatted);
   })
 );
 
+// ========================
+// GET /api/products/categories - Distinct categories
+// ========================
 productRouter.get(
   "/categories",
   expressAsyncHandler(async (req, res) => {
-    // Get categories only from active products in active stores
-    const categories = await Product.aggregate([
-      {
-        $lookup: {
-          from: "sellers",
-          localField: "seller",
-          foreignField: "_id",
-          as: "sellerInfo"
-        }
-      },
-      {
-        $match: {
-          $and: [
-            { isActive: true }, // Product must be active
-            { "sellerInfo.isActiveStore": true } // Store must be active
-          ]
-        }
-      },
-      {
-        $group: {
-          _id: "$category"
-        }
-      },
-      {
-        $project: {
-          _id: 1
-        }
-      },
-      {
-        $sort: { _id: 1 }
-      }
-    ]);
-
-    const categoryList = categories.map(cat => cat._id);
-    res.send(categoryList);
+    const cats = await sql`
+      SELECT DISTINCT p.category
+      FROM products p
+      JOIN sellers s ON p.seller_id = s.id
+      WHERE p.is_active = true AND s.is_active_store = true
+      ORDER BY p.category ASC
+    `;
+    res.send(cats.map((c) => c.category));
   })
 );
 
+// ========================
+// GET /api/products/seed - Seed products from data.js
+// ========================
 productRouter.get(
   "/seed",
   expressAsyncHandler(async (req, res) => {
-    const createdProducts = await Product.insertMany(data.products);
-    res.send({ createdProducts });
+    // Find admin seller for product assignment
+    const adminSeller = (await sql`
+      SELECT u.id FROM users u
+      WHERE u.is_admin = true AND u.is_seller = true
+      LIMIT 1
+    `)[0];
+
+    if (!adminSeller) {
+      return res.status(400).send({ message: "No admin seller found for seeding" });
+    }
+
+    const seller = (await sql`
+      SELECT id FROM sellers WHERE user_id = ${adminSeller.id} LIMIT 1
+    `)[0];
+
+    if (!seller) {
+      return res.status(400).send({ message: "No seller record found for admin user" });
+    }
+
+    let count = 0;
+    for (const p of data.products) {
+      const result = await sql`
+        INSERT INTO products (id, name, image, brand, category, description,
+                              price, count_in_stock, rating, num_reviews, seller_id, is_active)
+        VALUES (gen_random_uuid(), ${p.name}, ${p.image}, ${p.brand}, ${p.category},
+                ${p.description}, ${p.price}, ${p.countInStock}, 0, 0, ${seller.id}, true)
+        ON CONFLICT (name) DO NOTHING
+        RETURNING id;
+      `;
+      if (result[0]) count++;
+    }
+
+    res.send({ productCount: count, createdCount: count });
   })
 );
 
+// ========================
+// GET /api/products/:id - Single product with reviews
+// ========================
 productRouter.get(
   "/:id",
   expressAsyncHandler(async (req, res) => {
-    // Use aggregation to check if product exists and store is active
-    const productResult = await Product.aggregate([
-      {
-        $match: { _id: new mongoose.Types.ObjectId(req.params.id) }
-      },
-      {
-        $lookup: {
-          from: "sellers",
-          localField: "seller",
-          foreignField: "_id",
-          as: "sellerInfo"
-        }
-      },
-      {
-        $match: {
-          $and: [
-            { isActive: true }, // Product must be active
-            { "sellerInfo.isActiveStore": true } // Store must be active
-          ]
-        }
-      },
-      {
-        $project: {
-          sellerInfo: 0 // Remove seller info from response
-        }
-      }
-    ]);
+    const productData = await sql`
+      SELECT p.id, p.name, p.image, p.brand, p.category, p.description,
+             p.price, p.count_in_stock, p.rating, p.num_reviews,
+             p.seller_id, p.is_active, p.created_at, p.updated_at,
+             COALESCE(
+               (SELECT json_agg(json_build_object(
+                 '_id', r.id,
+                 'name', r.name,
+                 'rating', r.rating,
+                 'comment', r.comment,
+                 'created_at', r.created_at
+               ) ORDER BY r.created_at DESC)
+               FROM reviews r WHERE r.product_id = p.id),
+               '[]'
+             ) AS reviews
+      FROM products p
+      WHERE p.id = ${req.params.id}
+        AND p.is_active = true
+        AND EXISTS (
+          SELECT 1 FROM sellers s WHERE s.id = p.seller_id AND s.is_active_store = true
+        )
+    `;
 
-    if (productResult.length > 0) {
-      res.send(productResult[0]);
-    } else {
-      res.status(404).send({ message: "Product Not Found or Store Inactive" });
+    const product = productData[0];
+    if (!product) {
+      return res.status(404).send({ message: "Product Not Found or Store Inactive" });
     }
+
+    res.send({
+      id:        product.id,
+      name:      product.name,
+      image:     product.image,
+      brand:     product.brand,
+      category:  product.category,
+      description: product.description,
+      price:     parseFloat(product.price),
+      count_in_stock: product.count_in_stock,
+      rating:    parseFloat(product.rating),
+      num_reviews: product.num_reviews,
+      seller_id: product.seller_id,
+      reviews:   JSON.parse(product.reviews || "[]"),
+      is_active: product.is_active,
+      created_at: product.created_at,
+      updated_at: product.updated_at,
+    });
   })
 );
 
+// ========================
+// PUT /api/products/:id - Admin update product
+// ========================
 productRouter.put(
   "/:id",
   isAuth,
   isAdmin,
   expressAsyncHandler(async (req, res) => {
-    const productId = req.params.id;
-    const product = await Product.findById(productId);
-    if (product) {
-      product.name = req.body.name;
-      product.price = req.body.price;
-      product.image = req.body.image;
-      product.category = req.body.category;
-      product.brand = req.body.brand;
-      product.countInStock = req.body.countInStock;
-      product.description = req.body.description;
-      const updatedProduct = await product.save();
-      res.send({ message: "Product Updated", product: updatedProduct });
-    } else {
-      res.status(404).send({ message: "Product Not Found" });
+    try {
+      const { name, image, price, category, brand, countInStock, description } = req.body;
+
+      const result = await sql`
+        UPDATE products
+        SET name          = COALESCE(${name ?? null}, name),
+            image         = COALESCE(${image ?? null}, image),
+            price         = COALESCE(${price ?? null}, price),
+            category      = COALESCE(${category ?? null}, category),
+            brand         = COALESCE(${brand ?? null}, brand),
+            count_in_stock= COALESCE(${countInStock ?? null}, count_in_stock),
+            description   = COALESCE(${description ?? null}, description),
+            updated_at    = NOW()
+        WHERE id = ${req.params.id}
+        RETURNING *;
+      `;
+
+      if (!result[0]) {
+        return res.status(404).send({ message: "Product Not Found" });
+      }
+
+      const p = result[0];
+      res.send({
+        message:        "Product Updated",
+        product:        {
+          _id:       p.id,
+          name:      p.name,
+          image:     p.image,
+          brand:     p.brand,
+          category:  p.category,
+          description: p.description,
+          price:     parseFloat(p.price),
+          countInStock: p.count_in_stock,
+          rating:    parseFloat(p.rating),
+          numReviews: p.num_reviews,
+          seller:    p.seller_id,
+          is_active: p.is_active,
+          created_at: p.created_at,
+          updated_at: p.updated_at,
+        },
+      });
+    } catch (err) {
+      res.status(500).send({ message: "Internal server error", error: err.message });
     }
   })
 );
 
+// ========================
+// DELETE /api/products/:id - Admin delete product
+// ========================
 productRouter.delete(
   "/:id",
   isAuth,
   isAdmin,
   expressAsyncHandler(async (req, res) => {
-    const product = await Product.findById(req.params.id);
-    if (product) {
-      const deleteProduct = await product.remove();
-      res.send({
-        message: "Product Successfully Deleted",
-        product: deleteProduct,
-      });
-    } else {
-      res.status(404).send({ message: "Product Not Found" });
+    const result = await sql`
+      DELETE FROM products WHERE id = ${req.params.id} RETURNING *;
+    `;
+
+    if (!result[0]) {
+      return res.status(404).send({ message: "Product Not Found" });
     }
+
+    res.send({ message: "Product Successfully Deleted" });
   })
 );
 
-export const uploadAndRemoveBg = async (req, res) => {
-  try {
-    const file = req.file;
-
-    const formData = new FormData();
-    formData.append("image_file", fs.createReadStream(file.path));
-    formData.append("size", "auto");
-
-    const response = await axios.post("https://api.remove.bg/v1.0/removebg", formData, {
-      headers: {
-        ...formData.getHeaders(),
-        "X-Api-Key": REMOVE_BG_API_KEY,
-      },
-      responseType: "arraybuffer",
-    });
-
-    // Save image to public directory
-    const outputPath = path.join("public", "uploads", `removed-${file.filename}`);
-    fs.writeFileSync(outputPath, response.data);
-
-    // Delete original
-    fs.unlinkSync(file.path);
-
-    res.json({ imageUrl: `/uploads/removed-${file.filename}` });
-  } catch (error) {
-    console.error(error?.response?.data || error);
-    res.status(500).json({ message: "Failed to remove background" });
-  }
-};
-
-
-// create product 1 (as admin)
+// ========================
+// POST /api/products/ - Admin create product
+// ========================
 productRouter.post(
   "/",
   isAuth,
   isAdmin,
   expressAsyncHandler(async (req, res) => {
-    const product = new Product({
-      name: "New Product" + Date.now(),
-      image: "/images/sample.jpg",
-      price: 0,
-      category: "Category",
-      brand: "Brand",
-      countInStock: 0,
-      rating: 0,
-      numReviews: 0,
-      description: "Product description",
-    });
-    const createdProduct = await product.save();
-    res.send({ message: "New Product Created", product: createdProduct });
+    try {
+      const { seller_id } = req.body;
+
+      // Resolve seller owner
+      let ownerId = seller_id || null;
+      if (!ownerId) {
+        // Try to find admin's seller
+        const adminUser = (await sql`
+          SELECT u.id FROM users u
+          WHERE u.id = ${req.user._id} AND (u.is_admin = true OR u.is_seller = true)
+          LIMIT 1
+        `)[0];
+        if (adminUser) {
+          const seller = (await sql`
+            SELECT id FROM sellers WHERE user_id = ${adminUser.id} LIMIT 1
+          `)[0];
+          ownerId = seller?.id || null;
+        }
+      }
+
+      const product = await sql`
+        INSERT INTO products (id, name, image, price, category, brand,
+                              count_in_stock, rating, num_reviews, description, seller_id, is_active)
+        VALUES (gen_random_uuid(),
+                ${req.body.name || `New Product ${Date.now()}`},
+                ${req.body.image || "/images/sample.jpg"},
+                ${req.body.price ?? 0},
+                ${req.body.category || "Category"},
+                ${req.body.brand || "Brand"},
+                ${req.body.countInStock ?? 0},
+                0, 0,
+                ${req.body.description || "Product description"},
+                ${ownerId}, true)
+        RETURNING *;
+      `;
+
+      const p = product[0];
+      res.send({
+        message:        "New Product Created",
+        product:        {
+          _id:       p.id,
+          name:      p.name,
+          image:     p.image,
+          brand:     p.brand,
+          category:  p.category,
+          description: p.description,
+          price:     parseFloat(p.price),
+          countInStock: p.count_in_stock,
+          rating:    parseFloat(p.rating),
+          numReviews: p.num_reviews,
+          seller:    p.seller_id,
+          is_active: p.is_active,
+          created_at: p.created_at,
+          updated_at: p.updated_at,
+        },
+      });
+    } catch (err) {
+      res.status(500).send({ message: "Internal server error", error: err.message });
+    }
   })
 );
 
-// product router for  reviews
+// ========================
+// POST /api/products/:id/reviews - Submit product review
+// ========================
 productRouter.post(
   "/:id/reviews",
   isAuth,
   expressAsyncHandler(async (req, res) => {
-    const productId = req.params.id;
-    const product = await Product.findById(productId);
-    if (product) {
-      if (product.reviews.find((x) => x.name === req.user.name)) {
-        return res
-          .status(400)
-          .send({ message: "You already submitted a review" });
+    try {
+      const productId = req.params.id;
+      const { rating, comment } = req.body;
+
+      // Check product exists and is active
+      const product = (await sql`
+        SELECT id FROM products WHERE id = ${productId} AND is_active = true
+      `)[0];
+
+      if (!product) {
+        return res.status(404).send({ message: "Product Not Found" });
       }
-      const review = {
-        name: req.user.name,
-        rating: Number(req.body.rating),
-        comment: req.body.comment,
-      };
-      product.reviews.push(review);
-      product.numReviews = product.reviews.length;
-      product.rating =
-        product.reviews.reduce((a, c) => c.rating + a, 0) /
-        product.reviews.length;
-      const updatedProduct = await product.save();
+
+      // Check if user already reviewed (by user_id, not name)
+      const existing = (await sql`
+        SELECT COUNT(*) AS cnt FROM reviews
+        WHERE product_id = ${productId} AND user_id = ${req.user._id}
+      `)[0];
+
+      if (Number(existing.cnt) > 0) {
+        return res.status(400).send({ message: "You already submitted a review" });
+      }
+
+      // Insert review
+      const newReview = (await sql`
+        INSERT INTO reviews (id, product_id, user_id, name, comment, rating)
+        VALUES (gen_random_uuid(), ${productId}, ${req.user._id},
+                ${req.user.name}, ${comment || ""}, ${rating})
+        RETURNING *;
+      `)[0];
+
+      // Recalculate product rating/num_reviews globally
+      const stats = (await sql`
+        SELECT COUNT(*) AS cnt, COALESCE(AVG(rating), 0)::decimal(3,2) AS avg_rating
+        FROM reviews WHERE product_id = ${productId}
+      `)[0];
+
+      await sql`
+        UPDATE products
+        SET num_reviews = ${stats.cnt},
+            rating      = ${parseFloat(stats.avg_rating.toFixed(2))},
+            updated_at  = NOW()
+        WHERE id = ${productId}
+      `;
+
       res.status(201).send({
-        message: "Review Created",
-        review: updatedProduct.reviews[updatedProduct.reviews.length - 1],
+        message:  "Review Created",
+        review:   {
+          _id:          newReview.id,
+          name:         newReview.name,
+          rating:       parseFloat(newReview.rating),
+          comment:      newReview.comment,
+          created_at:   newReview.created_at,
+        },
       });
-    } else {
-      res.status(404).send({ message: "Product Not Found" });
+    } catch (err) {
+      res.status(500).send({ message: "Internal server error", error: err.message });
     }
   })
 );
