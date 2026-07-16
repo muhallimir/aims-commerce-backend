@@ -21,8 +21,8 @@
 | **5: User Router** | ✅ COMPLETE | userRouter.js → postgres.js (9 endpoints, 314 lines) |
 | **6: Product Router** | ✅ COMPLETE | productRouter.js → postgres.js (8 endpoints, 386 lines) |
 | **7: Order/Seller Router** | ✅ COMPLETE | orderRouter.js + sellerRouter.js → postgres.js (20 endpoints, 1161 lines) |
-| **8: File Uploads** | 🟡 PARTIAL | `uploadRouter.js` rewritten for Supabase Storage, but **bucket "uploads" not created** and seeded products still reference local `/uploads/p*.jpg`. Needs: create bucket, migrate local images, update product `image` URLs. |
-| **9: Socket.IO** | ⬜ PENDING | Verify chat with UUID user IDs |
+| **8: File Uploads** | ✅ COMPLETE | `uploadRouter.js` on Supabase Storage. `uploads` bucket created (public, 5MB cap, image MIME types only). 24 local images uploaded (`p1-p15.jpg` + 8 legacy). All 15 product rows re-pointed at Supabase Storage public URLs. See `scripts/setupSupabaseStorage.mjs`. |
+| **9: Socket.IO** | ✅ COMPLETE | Migrated to **Supabase Realtime**. New `chat_sessions` + `chat_messages` tables with RLS. Client uses `src/lib/chatClient.ts` (drop-in `socket.io-client` replacement). All Socket.IO + `socket.io-client` deps removed. See `prisma/migrations/5_chat_supabase_realtime.sql` and `scripts/chat_test.mjs` (4/4 tests). |
 | **10: Mongoose Cleanup** | ✅ COMPLETE | No mongoose in `package.json` or any `.js`/`.ts` file. `server.js` has no Mongoose calls. |
 | **11: ~~Railway Deploy~~** | ❌ CANCELLED | Replaced by monorepo deploy path (Vercel + Supabase). See `SERVERLESS_DEPLOYMENT_PLAN.md`. |
 | **12: Frontend E2E** | ⬜ PENDING | Full test of all 37 API endpoints from Next.js |

@@ -30,7 +30,7 @@
 │  │ orderRouter.js     (10 endpoints)                              │  │
 │  │ sellerRouter.js    (10 endpoints)                              │  │
 │  │ uploadRouter.js    ( 1 endpoint  → Supabase Storage)           │  │
-│  │ backend/server.js — Socket.IO chat (kept for now)              │  │
+│  │ backend/server.js — Express (chat moved to Supabase Realtime)  │  │
 │  └────────┬───────────────────────────────────────────────────────┘  │
 │           │ DIRECT_URL / DATABASE_URL                                │
 └───────────┼──────────────────────────────────────────────────────────┘
@@ -66,7 +66,7 @@ aims/                            ← workspace root
 │
 └── aims-commerce-backend/         ← Express.js + postgres.js API (port 5003)
     ├── backend/
-    │   ├── server.js              ← Express + Socket.IO
+    │   ├── server.js              ← Express only (chat on Supabase Realtime)
     │   ├── data.js                ← legacy 15-product seed (still used by /api/products/seed)
     │   ├── dbClient.js            ← postgres.js pool (the live one used by routers)
     │   ├── utils.js               ← generateToken, isAuth, isAdmin, isSeller
@@ -144,15 +144,21 @@ Defined in `prisma/schema.prisma`. Six tables:
 - `src/store/` is a Redux Toolkit + RTK Query setup. Each slice (`user.slice.js`, `product.slice.js`, `order.slice.js`, `seller.slice.js`, `admin.slice.js`, `chat.slice.js`) co-locates the state and the API endpoints.
 - API base URL: `process.env.NEXT_PUBLIC_API_URI` (defaults to `http://127.0.0.1:5003`).
 - JWT attached via `apiSlice.prepareHeaders` reading from cookie + localStorage.
-- Chat: Socket.IO client (`socket.io-client`) — still pointing at the Express server. Migration to Supabase Realtime is a Serverless Plan Phase 2 task.
+- Chat: `src/lib/chatClient.ts` (drop-in `socket.io-client` replacement) using Supabase Realtime (`postgres_changes` on `chat_messages` + `chat_sessions`). No long-lived WebSocket on the server — works in Vercel serverless.
 
 ## 6. Image / File Uploads
 
-Two paths today:
-- **Legacy**: `uploads/p1.jpg`–`p15.jpg` served from `backend/server.js` `app.use("/uploads", express.static(...))`. 15 product images, used by all seeded products.
-- **New**: `POST /api/uploads` accepts a multipart file → uploads to Supabase Storage bucket `uploads` → returns the public URL. (Bucket creation is pending; see `MONGODB_TO_SUPABASE_MIGRATION_PLAN.md` Phase 8 status.)
+`uploads` bucket (public, 5 MB cap, image MIME types only) created in Supabase Storage.
+All 15 seeded product images live there; product `image` rows hold the public Supabase URL.
+`scripts/setupSupabaseStorage.mjs` is idempotent and uploads any local files in `uploads/` that
+aren't already in the bucket.
 
-Until Phase 8 finishes, the frontend `getImageUrl()` helper accepts both `/uploads/...` (local) and `https://...supabase.co/...` (cloud) and passes them straight to `<Image src={…}>`.
+- `POST /api/uploads` accepts a multipart file → uploads to Supabase Storage → returns the
+  public URL (and optionally updates a product's `image` column).
+- Backend still serves `app.use("/uploads", express.static(...))` for backward compatibility
+  with the 8 legacy timestamped files (e.g. `1628083335036.jpg`) that aren't seeded products.
+- The frontend `getImageUrl()` helper passes through whatever string is in `product.image` —
+  no special-casing needed.
 
 ## 7. Source of Truth: `mongo-dump/`
 
@@ -228,7 +234,7 @@ See `MONGODB_TO_SUPABASE_MIGRATION_PLAN.md` and `SERVERLESS_DEPLOYMENT_PLAN.md` 
 | Backend env / schema / DDL / seed | ✅ |
 | User / product / order / seller routers → postgres.js | ✅ |
 | File uploads → Supabase Storage | 🟡 partial (router migrated, bucket + image upload not done) |
-| Socket.IO verification with UUIDs | ⬜ |
+| Socket.IO verification with UUIDs | ✅ | Migrated to Supabase Realtime. `scripts/chat_test.mjs` (4/4) verifies session upsert + message insert + realtime broadcast. |
 | Mongoose cleanup | ✅ (no mongoose in package.json or any .js/.ts) |
 | ~~Railway deploy~~ | ❌ cancelled (replaced by monorepo deploy) |
 | Frontend E2E | ✅ (43/43 passing — see ROLE_BASED_ACCESS.md) |

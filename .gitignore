@@ -8,6 +8,8 @@
 # testing
 /coverage
 scripts/e2e_test_results.json
+scripts/chat_test_results.json
+package-lock.json
 
 # production
 /build

@@ -197,8 +197,13 @@ async function testProductEndpoints(tokens) {
   const r1b = await http("GET", "/api/products/?category=Electronics");
   record("public", "GET /api/products?category=Electronics", r1b.status === 200 && r1b.data.every(p => p.category === "Electronics"), `count=${r1b.data?.length}`);
 
-  // GET /api/products/:id
-  const anyProduct = (await sql`SELECT id FROM products LIMIT 1`)[0];
+  // GET /api/products/:id — pick a product whose seller is active
+  const anyProduct = (await sql`
+    SELECT p.id FROM products p
+    JOIN sellers s ON s.id = p.seller_id
+    WHERE p.is_active = true AND s.is_active_store = true
+    LIMIT 1
+  `)[0];
   const r2 = await http("GET", `/api/products/${anyProduct.id}`);
   record("public", "GET /api/products/:id", r2.status === 200 && r2.data?.name, `name=${r2.data?.name}`);
 

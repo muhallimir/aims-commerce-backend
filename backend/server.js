@@ -1,5 +1,3 @@
-import http from "http";
-import { Server } from "socket.io";
 import express from "express";
 import dotenv from "dotenv";
 
@@ -16,11 +14,11 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-
 // image router for uploads
 app.use("/api/uploads", uploadRouter);
 
-// Socket.IO server kept for live chat (migrate to Supabase Realtime later)
+// Live chat moved to Supabase Realtime (see scripts/applyChatMigration.mjs
+// and the @supabase/supabase-js channel API in the frontend). No Socket.IO.
 app.use("/api/users", userRouter);
 // Product routes (uses postgres.js via productRouter)
 app.use("/api/products", productRouter);
@@ -51,7 +49,7 @@ import { dirname, join } from "path";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Serve static files from uploads folder (resolve relative to server.js location)
+// Serve legacy local images (for backward compat — new images are in Supabase Storage)
 app.use("/uploads", express.static(join(__dirname, "..", "uploads")));
 
 // error catch for userRouter
@@ -59,105 +57,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).send({ message: err.message });
 });
 
-// MongoDB uploads folder removed — using Supabase Storage instead
-
 const port = process.env.PORT || 5003;
-const httpServer = http.Server(app);
-const io = new Server(httpServer, { cors: { origin: "*" } });
-const users = [];
-
-io.on("connection", (socket) => {
-  console.log("connection", socket.id);
-  socket.on("disconnect", () => {
-    const user = users.find((x) => x.socketId === socket.id);
-    if (user) {
-      user.online = false;
-      console.log("Offline", user.name);
-      const admin = users.find((x) => x.isAdmin && x.online);
-      if (admin) {
-        io.to(admin.socketId).emit("updateUser", user);
-      }
-    }
-  });
-  socket.on("onLogin", (user) => {
-    const updatedUser = {
-      ...user,
-      online: true,
-      socketId: socket.id,
-      messages: [],
-    };
-    const existUser = users.find((x) => x._id === updatedUser._id);
-    if (existUser) {
-      existUser.socketId = socket.id;
-      existUser.online = true;
-    } else {
-      users.push(updatedUser);
-    }
-    console.log("Online", user.name);
-    const admin = users.find((x) => x.isAdmin && x.online);
-    if (admin) {
-      io.to(admin.socketId).emit("updateUser", updatedUser);
-    }
-    if (updatedUser.isAdmin) {
-      io.to(updatedUser.socketId).emit("listUsers", users);
-    }
-  });
-
-  socket.on("onUserSelected", (user) => {
-    const admin = users.find((x) => x.isAdmin && x.online);
-    if (admin) {
-      const existUser = users.find((x) => x._id === user._id);
-      io.to(admin.socketId).emit("selectUser", existUser);
-    }
-  });
-
-  socket.on("onMessage", (message) => {
-    if (message.isAdmin) {
-      const user = users.find((x) => x._id === message._id && x.online);
-      if (user) {
-        io.to(user.socketId).emit("message", message);
-        user.messages.push(message);
-      }
-    } else {
-      const admin = users.find((x) => x.isAdmin && x.online);
-      if (admin) {
-        io.to(admin.socketId).emit("message", message);
-        const user = users.find((x) => x._id === message._id && x.online);
-        user.messages.push(message);
-      } else {
-        io.to(socket.id).emit("message", {
-          name: "Admin",
-          body: "Sorry. I am not online right now",
-        });
-      }
-    }
-  });
-
-  // New event for escalating from chatbot to human support
-  socket.on("escalateToHuman", (userData) => {
-    const admin = users.find((x) => x.isAdmin && x.online);
-    if (admin) {
-      // Notify admin about escalation
-      io.to(admin.socketId).emit("chatbotEscalation", {
-        user: userData,
-        message: "A user has requested human assistance from the chatbot",
-        timestamp: new Date()
-      });
-
-      // Confirm to user
-      io.to(socket.id).emit("message", {
-        name: "Admin",
-        body: "I'm connecting you with a human agent. Please type in your message...",
-      });
-    } else {
-      io.to(socket.id).emit("message", {
-        name: "Admin",
-        body: "All our agents are currently offline. Please try again later or leave your message and we'll get back to you.",
-      });
-    }
-  });
-});
-
-httpServer.listen(port, () => {
+app.listen(port, () => {
   console.log(`Serve at http://localhost:${port}`);
 });

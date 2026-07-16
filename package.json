@@ -11,7 +11,6 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^1.4.2",
     "postgres": "^3.4.9",
-    "socket.io": "^4.5.1",
     "stripe": "^18.2.1"
   },
   "name": "aims-commerce",
@@ -39,7 +38,11 @@
     "db:reset": "npx prisma migrate reset --force && npx tsx prisma/seed.ts",
     "db:dump": "node scripts/dumpMongo.mjs",
     "db:migrate": "node scripts/migrateMongoToSupabase.mjs --truncate",
-    "test:e2e": "node scripts/e2e_test.mjs"
+    "db:storage": "node scripts/setupSupabaseStorage.mjs",
+    "db:chat-migration": "node scripts/applyChatMigration.mjs",
+    "test:e2e": "node scripts/e2e_test.mjs",
+    "test:chat": "node scripts/chat_test.mjs",
+    "test:all": "node scripts/e2e_test.mjs && node scripts/chat_test.mjs"
   },
   "author": "Amirsali Muhalli",
   "license": "ISC",
