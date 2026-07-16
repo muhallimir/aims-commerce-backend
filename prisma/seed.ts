@@ -91,7 +91,7 @@ async function main() {
   for (const p of DATA.products) {
     const result = await sql`
       INSERT INTO "products" (id, name, image, brand, category, description, price, "count_in_stock", rating, "num_reviews", "seller_id", "is_active")
-      VALUES (gen_random_uuid(), ${p.name}, ${p.image}, ${p.brand}, ${p.category}, ${p.description}, ${p.price}, ${p.countInStock}, 0, 0, ${seller.id}, true)
+      VALUES (gen_random_uuid(), ${p.name}, ${p.image}, ${p.brand}, ${p.category}, ${p.description}, ${p.price}, ${p.countInStock}, ${p.rating}, ${p.numReviews}, ${seller.id}, true)
       ON CONFLICT (name) DO NOTHING RETURNING id`;
     if (result.length > 0) insertedCount++;
   }

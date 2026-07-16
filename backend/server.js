@@ -46,6 +46,9 @@ app.get("/api/config/google", (req, res) => {
   res.send(process.env.GOOGLE_API_KEY || "");
 });
 
+// Serve static files from uploads folder
+app.use("/uploads", express.static("../uploads"));
+
 // error catch for userRouter
 app.use((err, _req, res, _next) => {
   res.status(500).send({ message: err.message });
