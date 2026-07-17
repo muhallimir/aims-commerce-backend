@@ -276,16 +276,14 @@ async function testProductEndpoints(tokens) {
 
 async function testSellerEndpoints(tokens) {
   console.log("\n═══ Seller endpoints ═══");
-  // POST /api/sellers/become (customer)
-  // Use a unique email so we can re-test safely
-  const becomeEmail = `${TEST_PREFIX}seller2@aims.test`;
-  await sql`DELETE FROM users WHERE email = ${becomeEmail}`;
-  const cust = (await sql`SELECT id FROM users WHERE email = ${TEST_PREFIX + 'customer@aims.test'}`)[0];
 
-  // The become endpoint requires the JWT user; we already have a customer token
-  const r1 = await http("POST", "/api/sellers/become", { token: tokens.customer, body: { name: TEST_PREFIX + "NewSeller", storeName: TEST_PREFIX + "NewStore" } });
-  // The customer user is already is_seller=false in the new setup; this should succeed
-  record("customer", "POST /api/sellers/become", r1.status === 200 || r1.status === 201, `status=${r1.status}`);
+  // The full realistic become-seller flow lives in testBecomeSellerFlow()
+  // (uses its own freshly-registered customer so we don't mutate the
+  // long-lived tokens.customer that other tests depend on).
+  // Here we only check the negative: an existing seller hitting become
+  // again should get 400, not silently re-promote or 500.
+  const r1 = await http("POST", "/api/sellers/become", { token: tokens.seller, body: { name: "double" } });
+  record("seller", "POST /api/sellers/become (already a seller → 400)", r1.status === 400, `status=${r1.status} body=${JSON.stringify(r1.data).slice(0,80)}`);
 
   // GET /api/sellers/products (seller)
   const r2 = await http("GET", "/api/sellers/products", { token: tokens.seller });
@@ -483,6 +481,167 @@ async function testOrderEndpoints(tokens) {
   return { orderId };
 }
 
+async function testBecomeSellerFlow() {
+  console.log("\n═══ Become-seller flow (realistic end-to-end) ═══");
+  // This is the full real flow a customer would walk through to open a store.
+  // We use a freshly-registered customer (not the long-lived tokens.customer)
+  // so the long-lived customer stays a customer for the rest of the suite.
+
+  const newbieEmail = `${TEST_PREFIX}newbie@aims.test`;
+  const newbiePassword = TEST_PASSWORD;
+  const newbieName = TEST_PREFIX + "Newbie";
+
+  // Wipe any leftover from a previous run before we start
+  await sql`DELETE FROM users WHERE email = ${newbieEmail}`;
+
+  // 1. Register a brand-new customer
+  const regR = await http("POST", "/api/users/register", {
+    body: { name: newbieName, email: newbieEmail, password: newbiePassword },
+  });
+  record("customer", "register fresh newbie", regR.status === 200 || regR.status === 201, `status=${regR.status}`);
+  const newbieId = regR.data?._id;
+  const newbieToken = regR.data?.token;
+  if (!newbieId || !newbieToken) {
+    record("customer", "become-seller flow", false, "register did not return _id+token");
+    return;
+  }
+
+  // 2. Verify the user STARTS as a non-seller
+  const profileBefore = await http("GET", "/api/users/profile", { token: newbieToken });
+  record(
+    "customer",
+    "GET /profile (newbie isSeller=false before)",
+    profileBefore.status === 200 && profileBefore.data?.isSeller === false,
+    `status=${profileBefore.status} isSeller=${profileBefore.data?.isSeller}`,
+  );
+
+  // 3. Verify seller-only endpoint is 403 before becoming a seller
+  const spBefore = await http("GET", "/api/sellers/products", { token: newbieToken });
+  record(
+    "customer",
+    "GET /sellers/products (denied 403 pre-become)",
+    spBefore.status === 403,
+    `status=${spBefore.status}`,
+  );
+
+  // 4. Promote to seller
+  const storeName = TEST_PREFIX + "NewbieStore";
+  const becomeR = await http("POST", "/api/sellers/become", {
+    token: newbieToken,
+    body: { name: newbieName + " Seller", storeName },
+  });
+  const becomeOk =
+    becomeR.status === 201 &&
+    becomeR.data?.user?.isSeller === true &&
+    typeof becomeR.data?.token === "string" &&
+    !!becomeR.data?.user?._id;
+  record(
+    "customer",
+    "POST /sellers/become (201 + isSeller=true + new JWT)",
+    becomeOk,
+    `status=${becomeR.status} isSeller=${becomeR.data?.user?.isSeller} hasNewToken=${!!becomeR.data?.token}`,
+  );
+  const newToken = becomeR.data?.token;
+  const newSellerId = becomeR.data?.user?.sellerId || becomeR.data?.seller?.id;
+
+  // 5. Verify the new JWT now works against /profile and shows isSeller=true
+  if (newToken) {
+    const profileAfter = await http("GET", "/api/users/profile", { token: newToken });
+    record(
+      "customer",
+      "GET /profile (newbie isSeller=true after, with new JWT)",
+      profileAfter.status === 200 && profileAfter.data?.isSeller === true,
+      `status=${profileAfter.status} isSeller=${profileAfter.data?.isSeller}`,
+    );
+  }
+
+  // 6. Verify the new JWT now passes the seller gate (/sellers/products → 200)
+  if (newToken) {
+    const spAfter = await http("GET", "/api/sellers/products", { token: newToken });
+    record(
+      "customer",
+      "GET /sellers/products (accessible 200 post-become, new JWT)",
+      spAfter.status === 200 && Array.isArray(spAfter.data),
+      `status=${spAfter.status} count=${spAfter.data?.length}`,
+    );
+  }
+
+  // 7. Verify the public can see the new seller profile (no auth required)
+  if (newSellerId) {
+    const pubR = await http("GET", `/api/sellers/${newSellerId}`);
+    record(
+      "public",
+      "GET /sellers/:id (new seller visible publicly)",
+      pubR.status === 200 && pubR.data?.name === newbieName + " Seller",
+      `status=${pubR.status} name=${pubR.data?.name}`,
+    );
+  }
+
+  // 8. Verify a fresh signin (no JWT) also returns isSeller=true now
+  const reSignin = await http("POST", "/api/users/signin", {
+    body: { email: newbieEmail, password: newbiePassword },
+  });
+  record(
+    "customer",
+    "POST /signin (re-signin returns isSeller=true)",
+    reSignin.status === 200 && reSignin.data?.isSeller === true,
+    `status=${reSignin.status} isSeller=${reSignin.data?.isSeller}`,
+  );
+
+  // 9. Verify the newbie can immediately POST a product as a seller
+  if (newToken) {
+    const newProd = {
+      name: TEST_PREFIX + "NewbieProd " + Date.now(),
+      image: "/uploads/n.jpg",
+      price: 9.99, category: TEST_PREFIX + "Cat", brand: "NewbieBrand",
+      countInStock: 3, description: TEST_PREFIX + " newbie product",
+    };
+    const pr = await http("POST", "/api/sellers/products", { token: newToken, body: newProd });
+    const pid = pr.data?._id || pr.data?.product?._id || pr.data?.product?.id;
+    record(
+      "customer",
+      "POST /sellers/products (newbie can create, post-become)",
+      isCreateOk(pr.status) && !!pid,
+      `status=${pr.status} id=${pid}`,
+    );
+    // Best-effort cleanup of the product we just created (no orders placed on it)
+    if (pid) {
+      await http("DELETE", `/api/sellers/products/${pid}`, { token: newToken });
+    }
+  }
+
+  // 10. Negative: trying to become AGAIN with the same new JWT → 400
+  if (newToken) {
+    const again = await http("POST", "/api/sellers/become", { token: newToken, body: { name: "x" } });
+    record(
+      "customer",
+      "POST /sellers/become (already a seller → 400)",
+      again.status === 400,
+      `status=${again.status}`,
+    );
+  }
+
+  // 11. Explicit cleanup of this flow's residue (defense in depth — the
+  // global cleanup() at the end will also catch these by prefix, but
+  // if the test crashes mid-run we don't want a phantom seller lingering).
+  try {
+    // Delete the sellers row first (FK), then the user
+    const sellerRows = await sql`SELECT id FROM sellers WHERE user_id = ${newbieId}`;
+    for (const s of sellerRows) {
+      await sql`DELETE FROM order_items WHERE product_id IN (SELECT id FROM products WHERE seller_id = ${s.id})`;
+      await sql`DELETE FROM products WHERE seller_id = ${s.id}`;
+      await sql`DELETE FROM sellers WHERE id = ${s.id}`;
+    }
+    // Also wipe any orphan orders the newbie placed
+    await sql`DELETE FROM order_items WHERE name LIKE ${TEST_PREFIX + "NewbieProd%"}`;
+    await sql`DELETE FROM orders WHERE shipping_full_name LIKE ${TEST_PREFIX + "%"}`;
+    const deleted = await sql`DELETE FROM users WHERE id = ${newbieId}`;
+    console.log(`  [become-seller flow] cleaned up newbie: users=${deleted.count}`);
+  } catch (e) {
+    console.warn("  [become-seller flow] cleanup failed:", e.message);
+  }
+}
+
 async function testUploadEndpoint(tokens) {
   console.log("\n═══ Upload endpoint ═══");
   // No file — should fail with 400 "No image file provided"
@@ -580,6 +739,7 @@ async function main() {
     await testProductEndpoints(tokens);
     await testSellerEndpoints(tokens);
     await testOrderEndpoints(tokens);
+    await testBecomeSellerFlow();
     await testUploadEndpoint(tokens);
   } catch (e) {
     console.error("Test crashed:", e);

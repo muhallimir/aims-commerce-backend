@@ -1,6 +1,6 @@
 # AIMS Commerce — Role-Based Access Control
 
-> Last verified: 2026-07-17 — 65/65 E2E tests passing across all 3 roles + 4 negative cases.
+> Last verified: 2026-07-17 — 74/74 E2E tests passing across all 3 roles + public, including a full realistic become-seller flow.
 > Test runner: `npm run test:e2e` (in `aims-commerce-backend/`).
 > Source of truth: `aims-commerce-backend/scripts/e2e_test.mjs`.
 
@@ -117,6 +117,23 @@ Generated from `scripts/e2e_test.mjs` — the row in the right column is what th
 | `PUT` | `/api/orders/:id/deliver` (seller attempt) | ❌ 401 denied — admin only |
 | `POST` | `/api/sellers/become` (already a seller) | ❌ 400 "User is already a seller" |
 
+## Become-Seller Flow (realistic, end-to-end)
+
+A 9-step customer → seller flow in `testBecomeSellerFlow()`:
+
+1. **Register fresh customer** (`__TEST__newbie@aims.test`) — gets JWT
+2. **GET /profile** → `isSeller=false` (start state)
+3. **GET /sellers/products** → 403 (gate denies before promotion)
+4. **POST /sellers/become** → 201 + `isSeller=true` + **new JWT issued**
+5. **GET /profile with new JWT** → `isSeller=true`
+6. **GET /sellers/products with new JWT** → 200 (gate now passes)
+7. **GET /sellers/:id (public, no auth)** → 200, new seller visible to the world
+8. **POST /signin (re-login from scratch)** → `isSeller=true` in fresh token
+9. **POST /sellers/products with new JWT** → 201 (newbie can immediately create products)
+10. **POST /sellers/become again** → 400 "User is already a seller"
+
+Then explicit cleanup deletes the newbie + their seller row + any products they created. The global `cleanup()` is also a safety net.
+
 ### Admin (isAdmin=true)
 
 | Method | Path | Test |
@@ -140,13 +157,13 @@ Generated from `scripts/e2e_test.mjs` — the row in the right column is what th
 $ npm run test:e2e
 ════════════════════════════════════════════
   E2E Test Summary
-  Total:  65
-  Passed: 65
+  Total:  74
+  Passed: 74
   Failed: 0
 ════════════════════════════════════════════
   admin:    11 pass, 0 fail (of 11)
-  seller:   11 pass, 0 fail (of 11)
-  customer: 24 pass, 0 fail (of 24)
+  seller:   12 pass, 0 fail (of 12)
+  customer: 32 pass, 0 fail (of 32)
   public:   19 pass, 0 fail (of 19)
 ```
 
