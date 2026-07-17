@@ -1,6 +1,6 @@
 # AIMS Commerce — Role-Based Access Control
 
-> Last verified: 2026-07-16 — 43/43 E2E tests passing across all 3 roles.
+> Last verified: 2026-07-17 — 65/65 E2E tests passing across all 3 roles + 4 negative cases.
 > Test runner: `npm run test:e2e` (in `aims-commerce-backend/`).
 > Source of truth: `aims-commerce-backend/scripts/e2e_test.mjs`.
 
@@ -58,35 +58,47 @@ Generated from `scripts/e2e_test.mjs` — the row in the right column is what th
 | `GET` | `/api/products/categories` | ✅ 200, distinct active-seller categories |
 | `GET` | `/api/products/:id` | ✅ 200, full product + reviews |
 | `GET` | `/api/users/:id` | ✅ 200, public profile |
-| `GET` | `/api/sellers/:sellerId` | (in seller router, returns seller profile) |
+| `GET` | `/api/users/profile` | ✅ 401 (no token); 200 with token |
+| `GET` | `/api/sellers/:sellerId` | ✅ 200 (found) / 404 (not found) |
 | `GET` | `/api/config/paypal` | ✅ 200, PayPal client id |
-| `GET` | `/api/config/google` | ✅ 200, Google API key |
+| `GET` | `/api/config/google` | ✅ 200, Google oauth client id |
 | `GET` | `/_health` | ✅ 200, "OK" |
 | `POST` | `/api/users/register` | ✅ 200, returns user + JWT |
 | `POST` | `/api/users/signin` | ✅ 200 (good creds), 401 (bad creds) |
-| `POST` | `/api/users/google-auth` | ✅ 200, OAuth flow |
+| `POST` | `/api/users/google-auth` | ✅ 401 (bad token) — clean error, not 500 |
 | `GET` | `/api/products/seed` | (legacy seed endpoint, not in test) |
 
 ### Customer (any authenticated user)
 
 | Method | Path | Test |
 |---|---|---|
-| `GET` | `/api/users/profile` (via `isAuth`) | (auth-only) |
+| `GET` | `/api/users/profile` | ✅ 200 (own profile) |
 | `PUT` | `/api/users/profile` | ✅ 200 |
 | `PUT` | `/api/users/:id` (other user) | ❌ 401 denied |
 | `DELETE` | `/api/users/:id` | ❌ 401 denied |
 | `GET` | `/api/users` (list all) | ❌ 401 denied (admin only) |
+| `GET` | `/api/orders/:id` (own) | ✅ 200 |
+| `GET` | `/api/orders/:id` (no token) | ❌ 401 denied |
 | `POST` | `/api/products/:id/reviews` | ✅ 201 |
 | `POST` | `/api/orders/` | ✅ 201 |
 | `GET` | `/api/orders/mine` | ✅ 200 |
-| `GET` | `/api/orders/purchase` | ✅ 200 |
-| `GET` | `/api/orders/:id` (own) | ✅ 200 |
+| `GET` | `/api/orders/purchase` | ✅ 200 (alias of /mine) |
+| `GET` | `/api/orders/purchase` (no token) | ❌ 401 denied |
 | `PUT` | `/api/orders/:id/pay` | ✅ 200 |
+| `POST` | `/api/orders/create-payment-intent` | ✅ 200 (Stripe live) / 503 (no key) |
+| `POST` | `/api/orders/create-payment-intent` (no auth) | ❌ 401 denied |
+| `PUT` | `/api/orders/:id/deliver` (customer attempt) | ❌ 401 — admin only |
 | `POST` | `/api/sellers/become` | ✅ 201 — promotes user to seller |
 | `GET` | `/api/sellers/products` | ❌ 403 denied (seller only) |
 | `GET` | `/api/sellers/analytics` | ❌ 403 denied |
 | `GET` | `/api/sellers/orders` | ❌ 403 denied |
-| `POST` | `/api/uploads/` | ✅ 400 if no file (auth passes) |
+| `PUT` | `/api/sellers/products/:productId` | ❌ 403 denied (only owning seller) |
+| `DELETE` | `/api/sellers/products/:productId` | ❌ 403 denied (only owning seller) |
+| `PUT` | `/api/sellers/orders/:orderId/status` | ❌ 403 denied (only seller of that order or admin) |
+| `GET` | `/api/orders/summary` | ❌ 401 denied (admin only) |
+| `POST` | `/api/uploads/` (no file) | ✅ 400 "No image file provided" |
+| `POST` | `/api/uploads/` (no auth) | ❌ 401 denied |
+| `POST` | `/api/uploads/` (real PNG) | ✅ 200 + Supabase Storage URL |
 | `POST` | `/api/products` (admin create) | ❌ 401 denied |
 
 ### Seller (isSeller=true)
@@ -96,13 +108,14 @@ Generated from `scripts/e2e_test.mjs` — the row in the right column is what th
 | `GET` | `/api/sellers/products` | ✅ 200, returns own products |
 | `POST` | `/api/sellers/products` | ✅ 201 |
 | `PUT` | `/api/sellers/products/:productId` | ✅ 200 |
-| `DELETE` | `/api/sellers/products/:productId` | (not in test) |
+| `DELETE` | `/api/sellers/products/:productId` (no orders) | ✅ 200 |
+| `DELETE` | `/api/sellers/products/:productId` (has order_items) | ✅ 409 Conflict — soft-delete instead |
 | `GET` | `/api/sellers/analytics` | ✅ 200 |
 | `GET` | `/api/sellers/orders` | ✅ 200 |
-| `PUT` | `/api/sellers/orders/:orderId/status` | (not in test) |
+| `PUT` | `/api/sellers/orders/:orderId/status` (own order) | ✅ 200 |
 | `PUT` | `/api/sellers/profile` | ✅ 200 |
-| `PUT` | `/api/sellers/:sellerId` | (not in test) |
-| `POST` | `/api/sellers/become` | ❌ 400 "User is already a seller" |
+| `PUT` | `/api/orders/:id/deliver` (seller attempt) | ❌ 401 denied — admin only |
+| `POST` | `/api/sellers/become` (already a seller) | ❌ 400 "User is already a seller" |
 
 ### Admin (isAdmin=true)
 
@@ -115,6 +128,7 @@ Generated from `scripts/e2e_test.mjs` — the row in the right column is what th
 | `PUT` | `/api/products/:id` | ✅ 200 |
 | `DELETE` | `/api/products/:id` | ✅ 200 |
 | `GET` | `/api/orders/` (all) | ✅ 200 |
+| `GET` | `/api/orders` (customer attempt) | ❌ 401 denied |
 | `GET` | `/api/orders/summary` | ✅ 200 |
 | `PUT` | `/api/orders/:id/deliver` | ✅ 200 |
 | `DELETE` | `/api/orders/:id` | ✅ 200 |
@@ -126,14 +140,14 @@ Generated from `scripts/e2e_test.mjs` — the row in the right column is what th
 $ npm run test:e2e
 ════════════════════════════════════════════
   E2E Test Summary
-  Total:  43
-  Passed: 43
+  Total:  65
+  Passed: 65
   Failed: 0
 ════════════════════════════════════════════
   admin:    11 pass, 0 fail (of 11)
-  seller:    7 pass, 0 fail (of 7)
-  customer: 15 pass, 0 fail (of 15)
-  public:   10 pass, 0 fail (of 10)
+  seller:   11 pass, 0 fail (of 11)
+  customer: 24 pass, 0 fail (of 24)
+  public:   19 pass, 0 fail (of 19)
 ```
 
 JSON: `aims-commerce-backend/scripts/e2e_test_results.json`.

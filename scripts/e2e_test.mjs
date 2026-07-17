@@ -116,7 +116,7 @@ async function signin(email) {
 
 // ── Test suites ───────────────────────────────────────────────
 async function testPublicEndpoints() {
-  console.log("\n═══ Public endpoints (no auth) ═══");
+  console.log("\n═══ Public endpoints ═══");
   const r = await http("GET", "/api/products");
   record("public", "GET /api/products", r.status === 200 && Array.isArray(r.data), `status=${r.status} count=${r.data?.length}`);
 
@@ -128,6 +128,27 @@ async function testPublicEndpoints() {
 
   const r4 = await http("GET", "/api/config/paypal");
   record("public", "GET /api/config/paypal", r4.status === 200, `status=${r4.status}`);
+
+  const r5 = await http("GET", "/api/config/google");
+  record("public", "GET /api/config/google (returns oauth client id)", r5.status === 200, `status=${r5.status} body=${JSON.stringify(r5.data).slice(0,80)}`);
+
+  // Public seller profile — pick any seller from the DB
+  const anySeller = (await sql`SELECT id FROM sellers LIMIT 1`)[0];
+  if (anySeller) {
+    const r6 = await http("GET", `/api/sellers/${anySeller.id}`);
+    record("public", "GET /api/sellers/:sellerId", r6.status === 200 && r6.data?._id === anySeller.id, `status=${r6.status} id=${r6.data?._id}`);
+  } else {
+    record("public", "GET /api/sellers/:sellerId", true, "skipped — no sellers in DB");
+  }
+
+  // Bad seller id → 404
+  const r6b = await http("GET", "/api/sellers/00000000-0000-0000-0000-000000000000");
+  record("public", "GET /api/sellers/:sellerId (not found → 404)", r6b.status === 404, `status=${r6b.status}`);
+
+  // Google OAuth bad credential path (we don't have a real Google token, but the
+  // endpoint should reject a bogus one with 400/401, not 500)
+  const r7 = await http("POST", "/api/users/google-auth", { body: { credential: "bogus-token" } });
+  record("public", "POST /api/users/google-auth (bad token → 400/401)", [400, 401].includes(r7.status), `status=${r7.status}`);
 }
 
 async function testAuthFlow(emails) {
@@ -163,6 +184,14 @@ async function testUserEndpoints(tokens, emails) {
 
   const r3 = await http("GET", "/api/users", { token: tokens.customer });
   record("customer", "GET /api/users (denied)", r3.status === 401, `status=${r3.status}`);
+
+  // GET /api/users/profile (customer — own profile)
+  const r3b = await http("GET", "/api/users/profile", { token: tokens.customer });
+  record("customer", "GET /api/users/profile", r3b.status === 200 && r3b.data?.email === emails.customerEmail, `status=${r3b.status} email=${r3b.data?.email}`);
+
+  // GET /api/users/profile (no token — denied)
+  const r3c = await http("GET", "/api/users/profile");
+  record("public", "GET /api/users/profile (no token → 401)", r3c.status === 401, `status=${r3c.status}`);
 
   // PUT /api/users/profile
   const r4 = await http("PUT", "/api/users/profile", { token: tokens.customer, body: { name: TEST_PREFIX + "CustomerRenamed" } });
@@ -288,11 +317,71 @@ async function testSellerEndpoints(tokens) {
   if (sellerProdId) {
     const r6 = await http("PUT", `/api/sellers/products/${sellerProdId}`, { token: tokens.seller, body: { price: 79.99 } });
     record("seller", "PUT /api/sellers/products/:id", r6.status === 200, `status=${r6.status}`);
+
+    // PUT /api/sellers/products/:id (customer — denied; only the owning seller or admin can update)
+    const r6b = await http("PUT", `/api/sellers/products/${sellerProdId}`, { token: tokens.customer, body: { price: 1.00 } });
+    record("customer", "PUT /api/sellers/products/:id (denied)", r6b.status === 401 || r6b.status === 403, `status=${r6b.status}`);
+
+    // Negative: another seller can't update this seller's product
+    // (We don't have a 2nd seller in scope, but the customer-denied test above
+    //  covers the same RBAC gate — non-sellers can't update seller products.)
+  }
+
+  // PUT /api/sellers/orders/:orderId/status (seller) — update an order's status
+  // We need an order that THIS seller owns. Create the order from the
+  // sellerProduct we just created in this test (above) so the seller_id
+  // matches our test seller.
+  let sellerOrderId;
+  if (sellerProdId) {
+    // Get the full product details (image, price)
+    const sp = (await sql`SELECT id, name, price, image, seller_id FROM products WHERE id = ${sellerProdId}`)[0];
+    if (sp) {
+      const orderBody = {
+        orderItems: [{ name: sp.name, qty: 1, image: sp.image, price: sp.price, product: sp.id, seller: sp.seller_id }],
+        shippingAddress: { fullName: TEST_PREFIX + "StatusOrder", contact: "555", address: "1 St", city: "C", postalCode: "0", country: "X" },
+        paymentMethod: "PayPal",
+        itemsPrice: sp.price, shippingPrice: 0, taxPrice: 0, totalPrice: sp.price,
+      };
+      const orderResp = await http("POST", "/api/orders", { token: tokens.customer, body: orderBody });
+      sellerOrderId = orderResp.data?._id || orderResp.data?.order?._id;
+    }
+  }
+  if (sellerOrderId) {
+    const r6c = await http("PUT", `/api/sellers/orders/${sellerOrderId}/status`, { token: tokens.seller, body: { status: "shipped" } });
+    record("seller", "PUT /api/sellers/orders/:orderId/status", r6c.status === 200, `status=${r6c.status} body=${JSON.stringify(r6c.data).slice(0,100)}`);
+
+    // Negative: customer can't update order status (only seller or admin)
+    const r6d = await http("PUT", `/api/sellers/orders/${sellerOrderId}/status`, { token: tokens.customer, body: { status: "delivered" } });
+    record("customer", "PUT /api/sellers/orders/:orderId/status (denied)", r6d.status === 401 || r6d.status === 403, `status=${r6d.status}`);
+  } else {
+    record("seller", "PUT /api/sellers/orders/:orderId/status", true, "skipped — no order to test");
   }
 
   // PUT /api/sellers/profile (seller) — requires name + storeName
   const r7 = await http("PUT", "/api/sellers/profile", { token: tokens.seller, body: { name: TEST_PREFIX + "Seller", storeName: TEST_PREFIX + "StoreRenamed" } });
   record("seller", "PUT /api/sellers/profile", r7.status === 200, `status=${r7.status} body=${JSON.stringify(r7.data).slice(0, 100)}`);
+
+  // DELETE /api/sellers/products/:id (seller) — only at the end so we don't kill
+  // the product we'd otherwise test against
+  if (sellerProdId) {
+    // We just used sellerProdId to place an order, so order_items reference it.
+    // The handler should refuse with 409 Conflict (preserving order history).
+    const r8 = await http("DELETE", `/api/sellers/products/${sellerProdId}`, { token: tokens.seller });
+    record("seller", "DELETE /api/sellers/products/:id (has orders → 409)", r8.status === 409, `status=${r8.status} body=${JSON.stringify(r8.data).slice(0,120)}`);
+
+    // Negative: customer can't delete seller products
+    // (Need to recreate the product since we just deleted it)
+    const r3c = await http("POST", "/api/sellers/products", { token: tokens.seller, body: { ...newProd, name: TEST_PREFIX + "SellerProdDel " + Date.now() } });
+    const recreateId = r3c.data?._id || r3c.data?.product?._id || r3c.data?.product?.id;
+    if (recreateId) {
+      const r8b = await http("DELETE", `/api/sellers/products/${recreateId}`, { token: tokens.customer });
+      record("customer", "DELETE /api/sellers/products/:id (denied)", r8b.status === 401 || r8b.status === 403, `status=${r8b.status}`);
+
+      // Clean delete of a brand-new product with no order history → 200
+      const r8c = await http("DELETE", `/api/sellers/products/${recreateId}`, { token: tokens.seller });
+      record("seller", "DELETE /api/sellers/products/:id (no orders → 200)", r8c.status === 200, `status=${r8c.status}`);
+    }
+  }
 
   return { sellerProdId };
 }
@@ -303,8 +392,16 @@ async function testOrderEndpoints(tokens) {
   const r1 = await http("GET", "/api/orders/mine", { token: tokens.customer });
   record("customer", "GET /api/orders/mine", r1.status === 200 && Array.isArray(r1.data), `status=${r1.status} count=${r1.data?.length}`);
 
+  // GET /api/orders/purchase (customer) — alias of /mine
+  const r1b = await http("GET", "/api/orders/purchase", { token: tokens.customer });
+  record("customer", "GET /api/orders/purchase (alias of /mine)", r1b.status === 200 && Array.isArray(r1b.data), `status=${r1b.status} count=${r1b.data?.length}`);
+
+  // GET /api/orders/purchase (no token — denied)
+  const r1c = await http("GET", "/api/orders/purchase");
+  record("public", "GET /api/orders/purchase (no token → 401)", r1c.status === 401, `status=${r1c.status}`);
+
   // POST /api/orders (customer) — create an order with the seller product
-  const anyProduct = (await sql`SELECT id, name, price, image, seller_id FROM products WHERE name NOT LIKE ${TEST_PREFIX + '%'} AND is_active = true LIMIT 1`)[0];
+  const anyProduct = (await sql`SELECT id, name, price, image, seller_id, count_in_stock FROM products WHERE name NOT LIKE ${TEST_PREFIX + '%'} AND is_active = true LIMIT 1`)[0];
   const orderBody = {
     orderItems: [{
       name: anyProduct.name, qty: 1, image: anyProduct.image,
@@ -326,11 +423,19 @@ async function testOrderEndpoints(tokens) {
   if (orderId) {
     const r3 = await http("GET", `/api/orders/${orderId}`, { token: tokens.customer });
     record("customer", "GET /api/orders:id (own)", r3.status === 200, `status=${r3.status}`);
+
+    // Negative: another customer (or unauth) can't see this order
+    const r3b = await http("GET", `/api/orders/${orderId}`);
+    record("public", "GET /api/orders:id (no token → 401)", r3b.status === 401, `status=${r3b.status}`);
   }
 
   // GET /api/orders (admin)
   const r4 = await http("GET", "/api/orders", { token: tokens.admin });
   record("admin", "GET /api/orders (all)", r4.status === 200 && Array.isArray(r4.data), `status=${r4.status} count=${r4.data?.length}`);
+
+  // GET /api/orders (denied for customer)
+  const r4b = await http("GET", "/api/orders", { token: tokens.customer });
+  record("customer", "GET /api/orders (all — denied)", r4b.status === 401, `status=${r4b.status}`);
 
   // GET /api/orders/summary (admin)
   const r5 = await http("GET", "/api/orders/summary", { token: tokens.admin });
@@ -339,10 +444,28 @@ async function testOrderEndpoints(tokens) {
   const r5b = await http("GET", "/api/orders/summary", { token: tokens.customer });
   record("customer", "GET /api/orders/summary (denied)", r5b.status === 401 || r5b.status === 403, `status=${r5b.status}`);
 
+  // POST /api/orders/create-payment-intent (customer)
+  // We send a small amount; if Stripe is configured (test key) it returns 200.
+  // If Stripe is not configured the handler returns 503 — both are valid outcomes.
+  const r5c = await http("POST", "/api/orders/create-payment-intent", { token: tokens.customer, body: { amount: 12.34 } });
+  record("customer", "POST /api/orders/create-payment-intent", [200, 503].includes(r5c.status) && !!r5c.data, `status=${r5c.status} keys=${r5c.data ? Object.keys(r5c.data).join(",") : "?"}`);
+
+  // POST /api/orders/create-payment-intent (no auth → 401)
+  const r5d = await http("POST", "/api/orders/create-payment-intent", { body: { amount: 1 } });
+  record("public", "POST /api/orders/create-payment-intent (no auth → 401)", r5d.status === 401, `status=${r5d.status}`);
+
   // PUT /api/orders:id/pay (customer)
   if (orderId) {
     const r6 = await http("PUT", `/api/orders/${orderId}/pay`, { token: tokens.customer, body: { id: "test-tx", status: "COMPLETED", update_time: new Date().toISOString() } });
     record("customer", "PUT /api/orders:id/pay", r6.status === 200, `status=${r6.status}`);
+
+    // Negative: customer can't deliver their own order (admin-only)
+    const r6b = await http("PUT", `/api/orders/${orderId}/deliver`, { token: tokens.customer });
+    record("customer", "PUT /api/orders:id/deliver (denied — admin only)", r6b.status === 401 || r6b.status === 403, `status=${r6b.status}`);
+
+    // Negative: seller can't mark an order delivered (admin-only)
+    const r6c = await http("PUT", `/api/orders/${orderId}/deliver`, { token: tokens.seller });
+    record("seller", "PUT /api/orders:id/deliver (denied — admin only)", r6c.status === 401 || r6c.status === 403, `status=${r6c.status}`);
   }
 
   // PUT /api/orders:id/deliver (admin)
@@ -362,10 +485,52 @@ async function testOrderEndpoints(tokens) {
 
 async function testUploadEndpoint(tokens) {
   console.log("\n═══ Upload endpoint ═══");
-  // Skip: requires real multer multipart. We just confirm auth is required.
+  // No file — should fail with 400 "No image file provided"
   const r1 = await http("POST", "/api/uploads", { token: tokens.customer, body: {} });
-  // Without a file, it returns 400 ("No image file provided") — which still proves auth passed
-  record("customer", "POST /api/uploads (auth passes, no file → 400)", r1.status === 400, `status=${r1.status} msg=${r1.data?.message}`);
+  record("customer", "POST /api/uploads (no file → 400)", r1.status === 400, `status=${r1.status} msg=${r1.data?.message}`);
+
+  // No auth — should fail with 401
+  const r2 = await http("POST", "/api/uploads", { body: {} });
+  record("public", "POST /api/uploads (no auth → 401)", r2.status === 401, `status=${r2.status}`);
+
+  // Real multipart upload: 1x1 PNG, 67 bytes
+  // Source: https://en.wikipedia.org/wiki/Portable_Network_Graphics (public-domain test image)
+  const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAfbLI3wAAAABJRU5ErkJggg==";
+  const pngBuf = Buffer.from(pngB64, "base64");
+  const boundary = "----TestBoundary" + Date.now();
+  const multipart = Buffer.concat([
+    Buffer.from(`--${boundary}\r\n`),
+    Buffer.from(`Content-Disposition: form-data; name="image"; filename="test-${TEST_PREFIX}upload.png"\r\n`),
+    Buffer.from(`Content-Type: image/png\r\n\r\n`),
+    pngBuf,
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+
+  const r3 = await fetch(`${API}/api/uploads`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${tokens.customer}`,
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+    },
+    body: multipart,
+  });
+  // The endpoint returns the public URL as plain text (not JSON)
+  const r3text = await r3.text();
+  const uploadedUrl = r3text.startsWith("http") ? r3text.trim() : null;
+  record("customer", "POST /api/uploads (real multipart PNG)",
+    r3.status === 200 && !!uploadedUrl,
+    `status=${r3.status} url=${uploadedUrl?.slice(0,80)}`);
+  // Best-effort cleanup of the storage object so we don't litter the bucket
+  if (uploadedUrl) {
+    const objectPath = uploadedUrl.split("/storage/v1/object/public/uploads/")[1];
+    if (objectPath) {
+      try {
+        const { createClient } = await import("@supabase/supabase-js");
+        const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SECRET_KEY, { auth: { persistSession: false } });
+        await admin.storage.from("uploads").remove([objectPath]);
+      } catch (_) { /* best-effort cleanup */ }
+    }
+  }
 }
 
 async function cleanup() {
