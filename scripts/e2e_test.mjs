@@ -384,6 +384,12 @@ async function cleanup() {
   // Test reviews
   const r6 = await sql`DELETE FROM reviews WHERE comment LIKE ${TEST_PREFIX + '%'}`;
   console.log(`  reviews: ${r6.count}`);
+  // Chat (defense in depth — e2e_test doesn't create chat, but if a future
+  // test does, this catches it)
+  const r7 = await sql`DELETE FROM chat_messages WHERE sender_name LIKE ${TEST_PREFIX + '%'} OR body LIKE ${TEST_PREFIX + '%'}`;
+  console.log(`  chat_messages: ${r7.count}`);
+  const r8 = await sql`DELETE FROM chat_sessions WHERE user_name LIKE ${TEST_PREFIX + '%'}`;
+  console.log(`  chat_sessions: ${r8.count}`);
 }
 
 async function main() {

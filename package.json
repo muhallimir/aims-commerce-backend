@@ -42,7 +42,8 @@
     "db:chat-migration": "node scripts/applyChatMigration.mjs",
     "test:e2e": "node scripts/e2e_test.mjs",
     "test:chat": "node scripts/chat_test.mjs",
-    "test:all": "node scripts/e2e_test.mjs && node scripts/chat_test.mjs"
+    "test:all": "node scripts/e2e_test.mjs && node scripts/chat_test.mjs",
+    "test:scan": "node scripts/scan_test_data.mjs"
   },
   "author": "Amirsali Muhalli",
   "license": "ISC",
