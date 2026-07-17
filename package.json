@@ -23,6 +23,7 @@
   "devDependencies": {
     "@prisma/client": "^7.8.0",
     "nodemon": "^2.0.12",
+    "playwright": "^1.61.1",
     "prisma": "^7.8.0",
     "tsx": "^4.23.1"
   },
@@ -41,8 +42,9 @@
     "db:storage": "node scripts/setupSupabaseStorage.mjs",
     "db:chat-migration": "node scripts/applyChatMigration.mjs",
     "test:e2e": "node scripts/e2e_test.mjs",
+    "test:browser": "node scripts/browser_e2e_start_selling.mjs",
     "test:chat": "node scripts/chat_test.mjs",
-    "test:all": "node scripts/e2e_test.mjs && node scripts/chat_test.mjs",
+    "test:all": "node scripts/e2e_test.mjs && node scripts/browser_e2e_start_selling.mjs && node scripts/chat_test.mjs",
     "test:scan": "node scripts/scan_test_data.mjs"
   },
   "author": "Amirsali Muhalli",

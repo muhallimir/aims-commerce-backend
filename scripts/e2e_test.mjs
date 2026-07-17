@@ -173,10 +173,40 @@ async function testAuthFlow(emails) {
 
 async function testUserEndpoints(tokens, emails) {
   console.log("\n═══ User endpoints ═══");
-  // GET /api/users/:id (public)
+  // GET /api/users/:id — was previously unauthenticated (security bug). Now
+  // requires auth: only the user themselves or an admin can fetch a user row.
   const anyUser = (await sql`SELECT id FROM users WHERE email = ${emails.adminEmail}`)[0];
+  const customerRow = (await sql`SELECT id FROM users WHERE email = ${emails.customerEmail}`)[0];
+  const sellerRow = (await sql`SELECT id FROM users WHERE email = ${emails.sellerEmail}`)[0];
+
+  // 1. No token → 401
   const r1 = await http("GET", `/api/users/${anyUser.id}`);
-  record("public", "GET /api/users/:id", r1.status === 200 && r1.data?.email === emails.adminEmail, `status=${r1.status}`);
+  record("public", "GET /api/users/:id (no token → 401)", r1.status === 401, `status=${r1.status}`);
+
+  // 2. Customer fetching their own profile by id → 200, response is mapped (camelCase)
+  const r1b = await http("GET", `/api/users/${customerRow.id}`, { token: tokens.customer });
+  record(
+    "customer",
+    "GET /api/users/:id (own profile, mapped)",
+    r1b.status === 200 && r1b.data?.email === emails.customerEmail && r1b.data?.isSeller === false && r1b.data?.isAdmin === false,
+    `status=${r1b.status} isSeller=${r1b.data?.isSeller} keys=${Object.keys(r1b.data || {}).slice(0, 6).join(",")}`,
+  );
+
+  // 3. Customer fetching another user (admin) → 403
+  const r1c = await http("GET", `/api/users/${anyUser.id}`, { token: tokens.customer });
+  record("customer", "GET /api/users/:id (other user → 403)", r1c.status === 403, `status=${r1c.status}`);
+
+  // 4. Customer fetching a different customer (the seller account) → 403
+  const r1d = await http("GET", `/api/users/${sellerRow.id}`, { token: tokens.customer });
+  record("customer", "GET /api/users/:id (different user, even customer → 403)", r1d.status === 403, `status=${r1d.status}`);
+
+  // 5. Admin fetching any user → 200
+  const r1e = await http("GET", `/api/users/${customerRow.id}`, { token: tokens.admin });
+  record("admin", "GET /api/users/:id (admin fetching any user)", r1e.status === 200 && r1e.data?.email === emails.customerEmail, `status=${r1e.status}`);
+
+  // 6. Unknown user id with valid token → 404
+  const r1f = await http("GET", `/api/users/00000000-0000-0000-0000-000000000000`, { token: tokens.admin });
+  record("admin", "GET /api/users/:id (unknown id → 404)", r1f.status === 404, `status=${r1f.status}`);
 
   // GET /api/users (admin only)
   const r2 = await http("GET", "/api/users", { token: tokens.admin });

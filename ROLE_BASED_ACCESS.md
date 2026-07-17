@@ -1,8 +1,8 @@
 # AIMS Commerce — Role-Based Access Control
 
-> Last verified: 2026-07-17 — 74/74 E2E tests passing across all 3 roles + public, including a full realistic become-seller flow.
-> Test runner: `npm run test:e2e` (in `aims-commerce-backend/`).
-> Source of truth: `aims-commerce-backend/scripts/e2e_test.mjs`.
+> Last verified: 2026-07-17 — 79 API E2E tests + 16 browser E2E tests + DB scan CLEAN.
+> Test runners: `npm run test:e2e`, `npm run test:browser`, `npm run test:scan` (in `aims-commerce-backend/`).
+> Source of truth: `aims-commerce-backend/scripts/e2e_test.mjs` (API) and `scripts/browser_e2e_start_selling.mjs` (browser).
 
 ---
 
@@ -57,7 +57,7 @@ Generated from `scripts/e2e_test.mjs` — the row in the right column is what th
 | `GET` | `/api/products/` | ✅ 200, returns 15 of 17 products (2 belong to inactive sellers) |
 | `GET` | `/api/products/categories` | ✅ 200, distinct active-seller categories |
 | `GET` | `/api/products/:id` | ✅ 200, full product + reviews |
-| `GET` | `/api/users/:id` | ✅ 200, public profile |
+| `GET` | `/api/users/:id` | ✅ 401 (no token); 403 (other user); 200 (self or admin) — see security note below |
 | `GET` | `/api/users/profile` | ✅ 401 (no token); 200 with token |
 | `GET` | `/api/sellers/:sellerId` | ✅ 200 (found) / 404 (not found) |
 | `GET` | `/api/config/paypal` | ✅ 200, PayPal client id |
@@ -157,15 +157,68 @@ Then explicit cleanup deletes the newbie + their seller row + any products they 
 $ npm run test:e2e
 ════════════════════════════════════════════
   E2E Test Summary
-  Total:  74
-  Passed: 74
+  Total:  79
+  Passed: 79
   Failed: 0
 ════════════════════════════════════════════
-  admin:    11 pass, 0 fail (of 11)
+  admin:    13 pass, 0 fail (of 13)
   seller:   12 pass, 0 fail (of 12)
-  customer: 32 pass, 0 fail (of 32)
+  customer: 35 pass, 0 fail (of 35)
   public:   19 pass, 0 fail (of 19)
+
+$ npm run test:browser   # the "Start Selling" click flow in a real browser
+════════════════════════════════════════════
+  Browser E2E (Start Selling flow)
+  Passed: 16
+  Failed: 0
+════════════════════════════════════════════
+
+$ npm run test:scan      # post-run DB scan
+  ✓ CLEAN — no test data found in any table.
 ```
+
+## 6. Security Note: `GET /api/users/:id` was unauthenticated
+
+The endpoint at `src/pages/api/users/[id].ts` previously had **no auth
+check** on the GET handler — anyone could fetch the full user row
+(email, phone, address, store_name, is_admin, is_seller, etc.). The
+StartSellingForm was abusing it as a "refetch my profile" call after
+`/api/sellers/become` returned, and then dispatching the raw
+snake_case data into Redux, which **broke `userInfo.isSeller`** and
+caused the destination page to bounce the user back to the form. The
+user perceived this as "clicked Start Selling, nothing happened."
+
+Both bugs were fixed:
+- The form now uses `res.data.user` from `/api/sellers/become`
+  directly (already camelCase) and only that.
+- The endpoint now requires auth: only the user themselves or an
+  admin can fetch a user row. The response is also mapped to camelCase.
+
+## 7. Browser-level test: `test:browser`
+
+Before the browser test existed, the only validation of the
+"Start Selling" flow was API-level (HTTP requests to the endpoints).
+The HTTP contract was correct, but the **UI** was broken. A real
+browser test now exercises:
+
+1. Register fresh customer via API
+2. Open `/signin`, sign in via the UI
+3. Verify JWT cookie was set
+4. Navigate to `/start-selling`, verify form is visible
+5. Fill the form (name + storeName)
+6. Click the "Start Selling" submit button
+7. Assert: the user lands on `/seller/dashboard` (not bounced back to `/start-selling`)
+8. Assert: no error message is shown
+9. Assert: the success/welcome/seller UI is visible
+10. Re-signin via API → assert `isSeller=true`
+11. Use the new JWT to access `/api/sellers/products` → 200
+12. Verify the user has a `seller_id` in the DB
+13. Public `GET /api/sellers/:id` returns the new seller's profile
+14. Verify the cookie was updated to a seller JWT
+15. Cleanup: delete the user and their seller row
+
+The test is in `scripts/browser_e2e_start_selling.mjs` and uses
+Playwright. Run with `npm run test:browser`.
 
 JSON: `aims-commerce-backend/scripts/e2e_test_results.json`.
 
